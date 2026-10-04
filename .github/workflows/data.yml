@@ -1,0 +1,24 @@
+# Refreshes data/ (season highs, leaders, team stats) from ESPN box scores.
+name: Update data
+on:
+  schedule:
+    - cron: '20 */3 * * *'   # every 3 hours
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: data
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/build-data.mjs
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || { git commit -m "Update data" && git push; }
