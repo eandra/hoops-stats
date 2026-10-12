@@ -504,7 +504,7 @@ function route() {
   } else if (kind === 'team' && arg) {
     showTeam(arg);
   } else {
-    showGames(ymd(new Date()));
+    showGames(addDays(ymd(new Date()), -1));
   }
   window.scrollTo(0, 0);
 }
