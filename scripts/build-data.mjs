@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds the static data the app can't get cheaply from ESPN:
 //   data/index.json                    – which season sets exist
-//   data/<year>-<type>/stats.json      – per-player season totals (leaders, team stats)
+//   data/<year>-<type>/stats.json      – per-player and per-team season totals
 //   data/<year>-<type>/highs.json      – current per-player and league single-game highs
 //   data/<year>-<type>/records.json    – top single-game lines per stat (records tab)
 //   data/<year>-<type>/flags/<id>.json – which stats were season highs in that game
@@ -94,6 +94,37 @@ function gameLines(summary) {
   return lines;
 }
 
+const TEAM_KEYS = ['w', 'l', 'pts', 'opp', 'reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+
+// Count a game for both teams: games played (as before), plus team totals
+// from the box score's team section, which includes team rebounds and turnovers.
+function addTeamGame(teams, summary) {
+  const comps = summary.header?.competitions?.[0]?.competitors || [];
+  for (const block of summary.boxscore?.players || []) {
+    const team = block.team;
+    if (!block.statistics?.[0]) continue;
+    const t = teams[team.id] ||= { abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo, gp: 0 };
+    t.gp++;
+    for (const k of TEAM_KEYS) t[k] ??= 0;
+    const me = comps.find(c => c.team.id === team.id);
+    const them = comps.find(c => c.team.id !== team.id);
+    if (me && them) {
+      t.pts += num(me.score); t.opp += num(them.score);
+      if (me.winner) t.w++; else if (them.winner) t.l++;
+    }
+    const ts = summary.boxscore.teams?.find(x => x.team.id === team.id)?.statistics || [];
+    const v = name => ts.find(x => x.name === name)?.displayValue;
+    const [fgm, fga] = split(v('fieldGoalsMade-fieldGoalsAttempted'));
+    const [tpm, tpa] = split(v('threePointFieldGoalsMade-threePointFieldGoalsAttempted'));
+    const [ftm, fta] = split(v('freeThrowsMade-freeThrowsAttempted'));
+    Object.entries({
+      reb: num(v('totalRebounds')), oreb: num(v('offensiveRebounds')), ast: num(v('assists')),
+      stl: num(v('steals')), blk: num(v('blocks')), to: num(v('totalTurnovers') ?? v('turnovers')),
+      fgm, fga, tpm, tpa, ftm, fta,
+    }).forEach(([k, x]) => { t[k] += x; });
+  }
+}
+
 // Fold a game's lines into the per-stat top lists. Ties keep the earlier game.
 function addRecords(records, lines, gameId, date) {
   for (const k of HIGH_KEYS) {
@@ -112,15 +143,20 @@ function addRecords(records, lines, gameId, date) {
 const summaryDate = summary => new Date(summary.header.competitions[0].date)
   .toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
 
-// records.json was added after some games were already processed:
-// rebuild it once from those games' box scores.
-async function backfillRecords(set) {
-  set.records = {};
+// records.json and team totals were added after some games were already
+// processed: rebuild whichever is missing once from those games' box scores.
+async function backfill(set) {
+  const records = !set.records;
+  const teams = Object.values(set.stats.teams).some(t => t.pts == null);
+  if (!records && !teams) return;
+  if (records) set.records = {};
+  if (teams) set.stats.teams = {};
   for (const id of set.state.processed) {
     const summary = await getJSON(`${API}/summary?event=${id}`);
-    addRecords(set.records, gameLines(summary), id, summaryDate(summary));
+    if (records) addRecords(set.records, gameLines(summary), id, summaryDate(summary));
+    if (teams) addTeamGame(set.stats.teams, summary);
   }
-  console.log(`Backfilled records for ${set.key} from ${set.state.processed.length} game(s).`);
+  console.log(`Backfilled ${[records && 'records', teams && 'team totals'].filter(Boolean).join(' and ')} for ${set.key} from ${set.state.processed.length} game(s).`);
 }
 
 function processGame(set, summary, gameId, date) {
@@ -128,13 +164,7 @@ function processGame(set, summary, gameId, date) {
   // League flags only once there are games from an earlier day to compare with.
   const leagueReady = set.state.firstDate && set.state.firstDate < date;
   const lines = gameLines(summary);
-
-  for (const block of summary.boxscore?.players || []) {
-    const team = block.team;
-    if (!block.statistics?.[0]) continue;
-    const t = set.stats.teams[team.id] ||= { abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo, gp: 0 };
-    t.gp++;
-  }
+  addTeamGame(set.stats.teams, summary);
 
   // Flags are computed against highs from previous games only, so every
   // player in this game is compared to the same baseline.
@@ -191,7 +221,7 @@ async function main() {
   const getSet = async key => {
     if (!sets[key]) {
       const set = await loadSet(key);
-      if (!set.records) await backfillRecords(set);
+      await backfill(set);
       sets[key] = set;
     }
     return sets[key];

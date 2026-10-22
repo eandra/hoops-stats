@@ -212,6 +212,16 @@ a.pl { cursor: pointer; }
 .tbl.ps.eff td.rk, .tbl.ps.eff th.rk { padding-left: 0; padding-right: .4em; text-align: right; }
 .tbl.ps.eff td:nth-child(2), .tbl.ps.eff th:nth-child(2) { text-align: left; text-overflow: ellipsis; }
 .tbl.ps.eff col.ta { width: 2.4em; }
+/* Team stats: too many columns for a phone, so it scrolls sideways with the team pinned. */
+.hscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tbl.ps.tstats { min-width: 38.2em; }
+.tbl.ps.tstats col.tmc { width: 4.9em; } .tbl.ps.tstats col.wl { width: 2.8em; }
+.tbl.ps.tstats col.a { width: 3.1em; } .tbl.ps.tstats col.b { width: 2.5em; }
+.tbl.ps.tstats td:first-child, .tbl.ps.tstats th:first-child {
+  position: sticky; left: 0; z-index: 1; background: var(--bg); text-overflow: clip;
+}
+.tbl.ps.tstats .tm img { width: 1.4em; height: 1.4em; vertical-align: -.35em; margin-right: .3em; }
+.tbl.ps.tstats td.pos { color: var(--pos); } .tbl.ps.tstats td.neg { color: var(--neg); }
 .tbl.ps.eff .tmab { text-align: left; color: var(--muted); font-size: .85em; }
 
 .teamhead { display: flex; align-items: center; gap: 12px; margin: 0 8px 12px; }
@@ -220,9 +230,3 @@ a.pl { cursor: pointer; }
 .teamhead .rec { color: var(--muted); font-size: 13px; }
 .teamhead img.face { object-fit: cover; border-radius: 50%; background: var(--surface); width: 56px; height: 56px; }
 
-.teamlist { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 6px; }
-.teamlist a {
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font-size: 14px;
-}
-.teamlist img { width: 24px; height: 24px; }

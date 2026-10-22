@@ -588,17 +588,50 @@ async function showPlayer(id, setKey) {
 
 // ---------- teams ----------
 
+// Team stats columns: per game unless noted. `asc` = lower is better.
+const TEAMS_COLS = [
+  { label: 'W-L', cls: 'wl', val: t => (t.w + t.l ? t.w / (t.w + t.l) : 0), fmt: (v, t) => `${t.w}-${t.l}` },
+  { label: 'PTS', cls: 'a', val: t => t.pts / t.gp },
+  { label: 'OPP', cls: 'a', val: t => t.opp / t.gp, asc: true },
+  { label: 'DIFF', cls: 'a', val: t => (t.pts - t.opp) / t.gp, fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) },
+  { label: 'REB', cls: 'a', val: t => t.reb / t.gp },
+  { label: 'AST', cls: 'a', val: t => t.ast / t.gp },
+  { label: 'STL', cls: 'b', val: t => t.stl / t.gp },
+  { label: 'BLK', cls: 'b', val: t => t.blk / t.gp },
+  { label: 'TO', cls: 'b', val: t => t.to / t.gp, asc: true },
+  { label: 'FG%', cls: 'pc', val: t => (t.fga ? t.fgm / t.fga * 100 : -1), fmt: (v, t) => pct(t.fgm, t.fga) },
+  { label: '3P%', cls: 'pc', val: t => (t.tpa ? t.tpm / t.tpa * 100 : -1), fmt: (v, t) => pct(t.tpm, t.tpa) },
+  { label: 'FT%', cls: 'pc', val: t => (t.fta ? t.ftm / t.fta * 100 : -1), fmt: (v, t) => pct(t.ftm, t.fta) },
+];
+
+let teamsSort = 1; // PTS
+
 async function showTeams() {
   loading();
-  try {
-    const d = await loadStandings();
-    setView(d.children.map(conf => {
-      const teams = conf.standings.entries.map(e => e.team)
-        .sort((a, b) => a.displayName.localeCompare(b.displayName));
-      return `<h2>${esc(conf.name)}</h2><div class="teamlist">${teams.map(t => `
-        <a href="#/team/${t.id}"><img src="${esc(t.logos?.[0]?.href)}" alt="" loading="lazy">${esc(t.shortDisplayName)}</a>`).join('')}</div>`;
-    }).join(''));
-  } catch (e) { fail(e); }
+  const { sets, set } = await pickSet();
+  const stats = set ? await local(`data/${set.key}/stats.json`) : null;
+  const teams = stats ? Object.entries(stats.teams).map(([id, t]) => ({ id, ...t })).filter(t => t.gp && t.pts != null) : [];
+  if (!teams.length) return setView('<p class="msg">No season data yet.</p>');
+
+  const col = TEAMS_COLS[teamsSort];
+  teams.sort((a, b) => (col.asc ? col.val(a) - col.val(b) : col.val(b) - col.val(a)));
+  const rows = teams.map(t => `<tr class="link" data-team="${esc(t.id)}">
+    <td class="tm"><img src="${esc(t.logo)}" alt="" loading="lazy">${esc(t.abbr)}</td>
+    ${TEAMS_COLS.map(c => { const v = c.val(t); return `<td class="${c.label === 'DIFF' && v ? (v > 0 ? 'pos' : 'neg') : ''}">${c.fmt ? c.fmt(v, t) : v.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
+
+  setView(`
+    ${setChips(sets, set)}
+    <div class="hscroll"><table class="tbl ps tstats">
+      <colgroup><col class="tmc">${TEAMS_COLS.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
+      <thead><tr><th>Team</th>${TEAMS_COLS.map((c, i) =>
+        `<th data-sort="${i}" class="${i === teamsSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="note">${esc(set.label)} · per game · OPP = points allowed · tap a column to sort, a team for its players · updated ${ago(stats.updated)}</p>`);
+  app.querySelectorAll('[data-sort]').forEach(th =>
+    th.onclick = () => { teamsSort = +th.dataset.sort; showTeams(); });
+  bindRows('team', id => '#/team/' + id);
+  bindSetChips(showTeams);
 }
 
 // Team player stats columns: per game unless noted.
