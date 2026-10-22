@@ -349,7 +349,11 @@ const per = (v, gp) => (gp ? (v / gp).toFixed(1) : '–');
 // Leader categories. Qualification follows the NBA's rules, prorated to
 // games played so far: 70% of team games for per-game stats, plus a
 // minimum number of makes for percentages (300 FG, 82 3P, 125 FT over 82 games).
+// NBA efficiency: PTS + REB + AST + STL + BLK − missed FG − missed FT − TO, per game.
+const eff = p => (p.pts + p.reb + p.ast + p.stl + p.blk - (p.fga - p.fgm) - (p.fta - p.ftm) - p.to) / p.gp;
+
 const LEADERS = [
+  { id: 'eff', label: 'EFF', val: eff },
   { id: 'pts', label: 'PTS', val: p => p.pts / p.gp },
   { id: 'reb', label: 'REB', val: p => p.reb / p.gp },
   { id: 'ast', label: 'AST', val: p => p.ast / p.gp },
@@ -385,7 +389,7 @@ async function showLeaders(catId) {
   const stats = await local(`data/${set.key}/stats.json`);
   if (!stats) return setView('<p class="msg">No season data yet.</p>');
 
-  const cat = LEADERS.find(c => c.id === catId) || LEADERS[0];
+  const cat = LEADERS.find(c => c.id === catId) || LEADERS[1];
   const teamGames = teamGamesOf(stats);
   const rows = [...combinePlayers(stats).values()]
     .filter(p => qualifies(p, cat, teamGames))
@@ -418,6 +422,41 @@ async function showLeaders(catId) {
     b.onclick = () => { location.hash = '#/leaders/' + b.dataset.cat; });
   bindRows('player', id => '#/player/' + id);
   bindSetChips(() => showLeaders(cat.id));
+}
+
+// ---------- efficiency ----------
+
+async function showEfficiency() {
+  loading();
+  const { sets, set } = await pickSet();
+  const stats = set ? await local(`data/${set.key}/stats.json`) : null;
+  if (!stats) return setView('<p class="msg">No season data yet.</p>');
+
+  const teamGames = teamGamesOf(stats);
+  // Everyone listed meets the games minimum, so skip GP and MIN to fit a phone.
+  const cols = TEAM_COLS.slice(2);
+  const players = [...combinePlayers(stats).values()]
+    .filter(p => qualifies(p, LEADERS[0], teamGames))
+    .sort((a, b) => eff(b) - eff(a));
+
+  const rows = players.map((p, i) => `<tr class="link" data-player="${esc(p.id)}">
+    <td class="rk">${i + 1}</td>
+    <td>${esc(p.n)}</td>
+    <td class="tmab">${esc(stats.teams[p.t]?.abbr)}</td>
+    <td class="v">${eff(p).toFixed(1)}</td>
+    ${cols.map(c => { const v = c.val(p); return `<td>${c.fmt ? c.fmt(v, p) : v.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
+
+  setView(`
+    ${setChips(sets, set)}
+    ${players.length ? `
+    <table class="tbl ps eff">
+      <colgroup><col class="rk"><col><col class="ta"><col class="e">${cols.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
+      <thead><tr><th class="rk">#</th><th>Player</th><th class="tmab">TM</th><th class="on">EFF</th>${cols.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>` : '<p class="msg">No qualified players yet.</p>'}
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · players in ${Math.ceil(teamGames * 0.7)}+ games · updated ${ago(stats.updated)}</p>`);
+  bindRows('player', id => '#/player/' + id);
+  bindSetChips(showEfficiency);
 }
 
 // ---------- records ----------
@@ -623,6 +662,7 @@ const TABS = [
   { id: 'games', href: '#/', label: 'Games', icon: '<path d="M4 5h16v15H4zM4 9h16M8 3v4M16 3v4"/>' },
   { id: 'standings', href: '#/standings', label: 'Standings', icon: '<path d="M5 20V10M12 20V4M19 20v-7"/>' },
   { id: 'leaders', href: '#/leaders', label: 'Leaders', icon: '<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/>' },
+  { id: 'eff', href: '#/eff', label: 'Efficiency', icon: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>' },
   { id: 'records', href: '#/records', label: 'Records', icon: '<circle cx="12" cy="9" r="6"/><path d="M8.5 14 7 22l5-3 5 3-1.5-8"/>' },
   { id: 'teams', href: '#/teams', label: 'Teams', icon: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M15 20a4.5 4.5 0 0 1 6.5-4"/>' },
 ];
@@ -635,7 +675,7 @@ document.body.append(nav);
 
 function route() {
   const [, kind, arg] = location.hash.split('/');
-  const tab = { g: 'games', d: 'games', standings: 'standings', leaders: 'leaders', records: 'records', teams: 'teams', team: 'teams', player: '' }[kind] ?? 'games';
+  const tab = { g: 'games', d: 'games', standings: 'standings', leaders: 'leaders', eff: 'eff', records: 'records', teams: 'teams', team: 'teams', player: '' }[kind] ?? 'games';
   nav.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
 
   if (kind === 'g' && arg) {
@@ -646,6 +686,8 @@ function route() {
     showStandings();
   } else if (kind === 'leaders') {
     showLeaders(arg);
+  } else if (kind === 'eff') {
+    showEfficiency();
   } else if (kind === 'records') {
     showRecords(arg);
   } else if (kind === 'player' && arg) {
