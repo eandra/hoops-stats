@@ -433,28 +433,28 @@ async function showEfficiency() {
   if (!stats) return setView('<p class="msg">No season data yet.</p>');
 
   const teamGames = teamGamesOf(stats);
-  // Everyone listed meets the games minimum, so skip GP and MIN to fit a phone.
-  const cols = TEAM_COLS.slice(2);
+  const col = EFF_COLS[effSort];
   const players = [...combinePlayers(stats).values()]
     .filter(p => qualifies(p, LEADERS[0], teamGames))
-    .sort((a, b) => eff(b) - eff(a));
+    .sort((a, b) => col.val(b) - col.val(a));
 
   const rows = players.map((p, i) => `<tr class="link" data-player="${esc(p.id)}">
     <td class="rk">${i + 1}</td>
     <td>${esc(p.n)}</td>
-    <td class="tmab">${esc(stats.teams[p.t]?.abbr)}</td>
-    <td class="v">${eff(p).toFixed(1)}</td>
-    ${cols.map(c => { const v = c.val(p); return `<td>${c.fmt ? c.fmt(v, p) : v.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
+    ${EFF_COLS.map(c => { const v = c.val(p); return `<td class="${c.label === 'EFF' ? 'v' : ''}">${c.fmt ? c.fmt(v, p) : v.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
 
   setView(`
     ${setChips(sets, set)}
     ${players.length ? `
     <table class="tbl ps eff">
-      <colgroup><col class="rk"><col><col class="ta"><col class="e">${cols.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
-      <thead><tr><th class="rk">#</th><th>Player</th><th class="tmab">TM</th><th class="on">EFF</th>${cols.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+      <colgroup><col class="rk"><col>${EFF_COLS.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
+      <thead><tr><th class="rk">#</th><th>Player</th>${EFF_COLS.map((c, i) =>
+        `<th data-sort="${i}" class="${i === effSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>` : '<p class="msg">No qualified players yet.</p>'}
-    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · players in ${Math.ceil(teamGames * 0.7)}+ games · updated ${ago(stats.updated)}</p>`);
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · players in ${Math.ceil(teamGames * 0.7)}+ games · tap a column to sort · updated ${ago(stats.updated)}</p>`);
+  app.querySelectorAll('[data-sort]').forEach(th =>
+    th.onclick = () => { effSort = +th.dataset.sort; showEfficiency(); });
   bindRows('player', id => '#/player/' + id);
   bindSetChips(showEfficiency);
 }
@@ -650,6 +650,10 @@ const TEAM_COLS = [
 ];
 
 let teamSort = 2; // PTS
+
+// Efficiency tab: everyone listed meets the games minimum, so skip GP and MIN to fit a phone.
+const EFF_COLS = [...TEAM_COLS.slice(2), { label: 'EFF', cls: 'e', val: eff }];
+let effSort = EFF_COLS.length - 1; // EFF
 
 async function showTeam(id) {
   loading();

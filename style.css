@@ -208,10 +208,9 @@ a.pl { cursor: pointer; }
 .tbl.ps td:last-child, .tbl.ps th:last-child { padding-right: .5em; }
 .tbl.ps col.gp { width: 1.6em; } .tbl.ps col.m { width: 2em; } .tbl.ps col.a { width: 2.6em; }
 .tbl.ps col.b { width: 2.2em; } .tbl.ps col.pc { width: 2.75em; }
-.tbl.ps.eff col.rk { width: 1.9em; } .tbl.ps.eff col.e { width: 2.6em; }
+.tbl.ps.eff col.rk { width: 1.9em; } .tbl.ps.eff col.e { width: 3.1em; }
 .tbl.ps.eff td.rk, .tbl.ps.eff th.rk { padding-left: 0; padding-right: .4em; text-align: right; }
 .tbl.ps.eff td:nth-child(2), .tbl.ps.eff th:nth-child(2) { text-align: left; text-overflow: ellipsis; }
-.tbl.ps.eff col.ta { width: 2.4em; }
 /* Team stats: too many columns for a phone, so it scrolls sideways with the team pinned. */
 .hscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .tbl.ps.tstats { min-width: 38.2em; }
@@ -222,7 +221,6 @@ a.pl { cursor: pointer; }
 }
 .tbl.ps.tstats .tm img { width: 1.4em; height: 1.4em; vertical-align: -.35em; margin-right: .3em; }
 .tbl.ps.tstats td.pos { color: var(--pos); } .tbl.ps.tstats td.neg { color: var(--neg); }
-.tbl.ps.eff .tmab { text-align: left; color: var(--muted); font-size: .85em; }
 
 .teamhead { display: flex; align-items: center; gap: 12px; margin: 0 8px 12px; }
 .teamhead img { width: 48px; height: 48px; }
