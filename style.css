@@ -192,6 +192,11 @@ h2:first-child { margin-top: 4px; }
 .tbl.stand col.wl { width: 3.4em; } .tbl.stand col.gb { width: 2.8em; }
 .tbl.stand col.st { width: 2.8em; } .tbl.stand col.l10 { width: 3em; }
 .tbl.lead col.v { width: 3.6em; } .tbl.lead col.gp { width: 2.6em; }
+.tbl.rec col.dt { width: 4.4em; }
+.tbl.prank col.v { width: 3.6em; } .tbl.prank col.r { width: 5.2em; }
+.tbl.prank .sub { margin-left: 3px; font-size: 11px; }
+a.pl { cursor: pointer; }
+@media (hover: hover) { a.pl:hover { text-decoration: underline; } }
 
 /* Team player stats: same viewport-scaled sizing trick as the box score. */
 .tbl.ps { font-size: clamp(10.5px, 2.95vw, 14px); }
@@ -207,6 +212,7 @@ h2:first-child { margin-top: 4px; }
 .teamhead img { width: 48px; height: 48px; }
 .teamhead .nm { font-size: 20px; font-weight: 700; }
 .teamhead .rec { color: var(--muted); font-size: 13px; }
+.teamhead img.face { object-fit: cover; border-radius: 50%; background: var(--surface); width: 56px; height: 56px; }
 
 .teamlist { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 6px; }
 .teamlist a {

@@ -3,6 +3,7 @@
 //   data/index.json                    – which season sets exist
 //   data/<year>-<type>/stats.json      – per-player season totals (leaders, team stats)
 //   data/<year>-<type>/highs.json      – current per-player and league single-game highs
+//   data/<year>-<type>/records.json    – top single-game lines per stat (records tab)
 //   data/<year>-<type>/flags/<id>.json – which stats were season highs in that game
 //   data/<year>-<type>/state.json      – processed game ids (internal)
 //
@@ -25,6 +26,7 @@ const TYPE_LABEL = { 1: 'Preseason', 2: 'Regular Season', 3: 'Playoffs', 5: 'Pla
 
 // Stats tracked for season highs, in this order everywhere.
 export const HIGH_KEYS = ['pts', 'reb', 'ast', 'blk', 'stl', 'pm', 'fgm', 'tpm', 'ftm'];
+const RECORDS_TOP = 20;
 
 async function getJSON(url, tries = 3) {
   for (let i = 1; ; i++) {
@@ -72,27 +74,66 @@ async function loadSet(key) {
     state: await readJSON(join(dir, 'state.json'), { processed: [], firstDate: null }),
     stats: await readJSON(join(dir, 'stats.json'), { teams: {}, players: {} }),
     highs: await readJSON(join(dir, 'highs.json'), { players: {}, league: {} }),
+    records: await readJSON(join(dir, 'records.json'), null),
   };
+}
+
+// Player lines from a box score (players who actually played).
+function gameLines(summary) {
+  const lines = [];
+  for (const block of summary.boxscore?.players || []) {
+    const st = block.statistics?.[0];
+    if (!st) continue;
+    for (const a of st.athletes || []) {
+      if (a.didNotPlay || !a.stats?.length) continue;
+      const line = parseLine(st.keys, a.stats);
+      if (!line.min && !line.pts && !line.reb && !line.ast) continue;
+      lines.push({ id: a.athlete.id, name: a.athlete.shortName || a.athlete.displayName, team: block.team.id, line });
+    }
+  }
+  return lines;
+}
+
+// Fold a game's lines into the per-stat top lists. Ties keep the earlier game.
+function addRecords(records, lines, gameId, date) {
+  for (const k of HIGH_KEYS) {
+    const list = records[k] ||= [];
+    for (const { id, name, team, line } of lines) {
+      const v = line[k];
+      if (v <= 0 || (list.length >= RECORDS_TOP && v <= list[list.length - 1].v)) continue;
+      list.push({ v, id, n: name, t: team, g: gameId, d: date });
+      list.sort((a, b) => b.v - a.v || a.d.localeCompare(b.d) || a.g.localeCompare(b.g));
+      list.length = Math.min(list.length, RECORDS_TOP);
+    }
+  }
+}
+
+// Game date (US Eastern, like ESPN's scoreboard days) from a summary.
+const summaryDate = summary => new Date(summary.header.competitions[0].date)
+  .toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
+
+// records.json was added after some games were already processed:
+// rebuild it once from those games' box scores.
+async function backfillRecords(set) {
+  set.records = {};
+  for (const id of set.state.processed) {
+    const summary = await getJSON(`${API}/summary?event=${id}`);
+    addRecords(set.records, gameLines(summary), id, summaryDate(summary));
+  }
+  console.log(`Backfilled records for ${set.key} from ${set.state.processed.length} game(s).`);
 }
 
 function processGame(set, summary, gameId, date) {
   const flags = { p: {}, l: {} };
   // League flags only once there are games from an earlier day to compare with.
   const leagueReady = set.state.firstDate && set.state.firstDate < date;
-  const lines = [];
+  const lines = gameLines(summary);
 
   for (const block of summary.boxscore?.players || []) {
     const team = block.team;
-    const st = block.statistics?.[0];
-    if (!st) continue;
+    if (!block.statistics?.[0]) continue;
     const t = set.stats.teams[team.id] ||= { abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo, gp: 0 };
     t.gp++;
-    for (const a of st.athletes || []) {
-      if (a.didNotPlay || !a.stats?.length) continue;
-      const line = parseLine(st.keys, a.stats);
-      if (!line.min && !line.pts && !line.reb && !line.ast) continue;
-      lines.push({ id: a.athlete.id, name: a.athlete.shortName || a.athlete.displayName, team: team.id, line });
-    }
   }
 
   // Flags are computed against highs from previous games only, so every
@@ -124,6 +165,7 @@ function processGame(set, summary, gameId, date) {
     }
   }
 
+  addRecords(set.records, lines, gameId, date);
   set.state.firstDate ||= date;
   set.state.processed.push(gameId);
   return flags;
@@ -146,7 +188,15 @@ async function main() {
   const todo = days.filter(d => !done.has(d));
 
   const sets = {};
-  const getSet = async key => (sets[key] ||= await loadSet(key));
+  const getSet = async key => {
+    if (!sets[key]) {
+      const set = await loadSet(key);
+      if (!set.records) await backfillRecords(set);
+      sets[key] = set;
+    }
+    return sets[key];
+  };
+  for (const key of Object.keys(index.sets)) await getSet(key);
   let added = 0;
 
   for (const day of todo) {
@@ -174,6 +224,7 @@ async function main() {
     await writeJSON(join(set.dir, 'state.json'), set.state);
     await writeJSON(join(set.dir, 'stats.json'), { ...set.stats, updated });
     await writeJSON(join(set.dir, 'highs.json'), { ...set.highs, keys: HIGH_KEYS, updated });
+    await writeJSON(join(set.dir, 'records.json'), { ...set.records, keys: HIGH_KEYS, updated });
   }
   index.checked.sort();
   index.updated = new Date().toISOString();

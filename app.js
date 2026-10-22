@@ -43,6 +43,17 @@ function local(path) {
   return localCache.get(path);
 }
 
+// Player names link to the player page from everywhere.
+const playerLink = (id, name, title) =>
+  `<a class="pl" href="#/player/${esc(id)}"${title ? ` title="${esc(title)}"` : ''}>${esc(name)}</a>`;
+
+// Table rows that open somewhere on tap, except when the tap hits a link inside them.
+function bindRows(attr, href) {
+  app.querySelectorAll(`[data-${attr}]`).forEach(r => r.onclick = e => {
+    if (!e.target.closest('a')) location.hash = href(r.dataset[attr]);
+  });
+}
+
 function setView(html) { app.innerHTML = html; }
 function loading() { setView('<p class="msg">Loading…</p>'); window.scrollTo(0, 0); }
 function fail(err) { setView(`<p class="msg">Couldn't load data.<br><small>${esc(err.message)}</small></p>`); }
@@ -228,12 +239,12 @@ function boxTable(teamBlock, flags) {
 
   const row = a => {
     const name = a.athlete.shortName || a.athlete.displayName;
-    const title = esc(a.athlete.displayName);
+    const title = a.athlete.displayName;
     if (!a.stats?.length || a.didNotPlay) {
-      return `<tr class="dnp"><td title="${title}">${esc(name)}</td>
+      return `<tr class="dnp"><td>${playerLink(a.athlete.id, name, title)}</td>
         <td class="why" colspan="${COLS.length}">DNP${a.reason ? ' – ' + esc(a.reason.toLowerCase()) : ''}</td></tr>`;
     }
-    return `<tr><td title="${title}">${esc(name)}</td>${cells(a.stats, a.athlete.id)}</tr>`;
+    return `<tr><td>${playerLink(a.athlete.id, name, title)}</td>${cells(a.stats, a.athlete.id)}</tr>`;
   };
 
   const starters = st.athletes.filter(a => a.starter);
@@ -328,7 +339,7 @@ function setChips(sets, set) {
 function bindSetChips(rerender) {
   app.querySelectorAll('[data-set]').forEach(b => b.onclick = () => {
     try { localStorage.setItem('set', b.dataset.set); } catch {}
-    rerender();
+    rerender(b.dataset.set);
   });
 }
 
@@ -350,6 +361,23 @@ const LEADERS = [
   { id: 'ftp', label: 'FT%', val: p => p.ftm / p.fta * 100, min: (p, g) => p.ftm >= 125 * g / 82 },
 ];
 
+const SUM_KEYS = ['gp', 'min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+
+// Combine stints for traded players; `t` is their most recent team.
+function combinePlayers(stats) {
+  const byPlayer = new Map();
+  for (const s of Object.values(stats.players)) {
+    const p = byPlayer.get(s.id);
+    if (!p) { byPlayer.set(s.id, { ...s }); continue; }
+    for (const k of SUM_KEYS) p[k] += s[k];
+    p.t = s.t;
+  }
+  return byPlayer;
+}
+
+const teamGamesOf = stats => Math.max(0, ...Object.values(stats.teams).map(t => t.gp));
+const qualifies = (p, cat, teamGames) => p.gp >= Math.ceil(teamGames * 0.7) && (!cat.min || cat.min(p, teamGames));
+
 async function showLeaders(catId) {
   loading();
   const { sets, set } = await pickSet();
@@ -358,17 +386,9 @@ async function showLeaders(catId) {
   if (!stats) return setView('<p class="msg">No season data yet.</p>');
 
   const cat = LEADERS.find(c => c.id === catId) || LEADERS[0];
-  // Combine stints for traded players; show their most recent team.
-  const byPlayer = new Map();
-  for (const s of Object.values(stats.players)) {
-    const p = byPlayer.get(s.id);
-    if (!p) { byPlayer.set(s.id, { ...s }); continue; }
-    for (const k of ['gp', 'min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta']) p[k] += s[k];
-    p.t = s.t;
-  }
-  const teamGames = Math.max(0, ...Object.values(stats.teams).map(t => t.gp));
-  const rows = [...byPlayer.values()]
-    .filter(p => p.gp >= Math.ceil(teamGames * 0.7) && (!cat.min || cat.min(p, teamGames)))
+  const teamGames = teamGamesOf(stats);
+  const rows = [...combinePlayers(stats).values()]
+    .filter(p => qualifies(p, cat, teamGames))
     .map(p => ({ p, v: cat.val(p) }))
     .filter(r => Number.isFinite(r.v))
     .sort((a, b) => b.v - a.v)
@@ -376,7 +396,7 @@ async function showLeaders(catId) {
 
   const body = rows.map((r, i) => {
     const t = stats.teams[r.p.t] || {};
-    return `<tr class="link" data-team="${r.p.t}">
+    return `<tr class="link" data-player="${esc(r.p.id)}">
       <td class="rk">${i + 1}</td>
       <td class="tm">${esc(r.p.n)}<span class="sub">${esc(t.abbr)}</span></td>
       <td class="v">${r.v.toFixed(1)}</td>
@@ -396,9 +416,135 @@ async function showLeaders(catId) {
     <p class="note">${esc(set.label)} · ${set.games} games · updated ${ago(stats.updated)}</p>`);
   app.querySelectorAll('[data-cat]').forEach(b =>
     b.onclick = () => { location.hash = '#/leaders/' + b.dataset.cat; });
-  app.querySelectorAll('[data-team]').forEach(r =>
-    r.onclick = () => { location.hash = '#/team/' + r.dataset.team; });
+  bindRows('player', id => '#/player/' + id);
   bindSetChips(() => showLeaders(cat.id));
+}
+
+// ---------- records ----------
+
+// Single-game records, keyed like the season highs (scripts/build-data.mjs).
+const RECORDS = [
+  { id: 'pts', label: 'PTS' }, { id: 'reb', label: 'REB' }, { id: 'ast', label: 'AST' },
+  { id: 'blk', label: 'BLK' }, { id: 'stl', label: 'STL' }, { id: 'fgm', label: 'FGM' },
+  { id: 'tpm', label: '3PM' }, { id: 'ftm', label: 'FTM' }, { id: 'pm', label: '+/-' },
+];
+
+const shortDate = d => parseYmd(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+async function showRecords(catId) {
+  loading();
+  const { sets, set } = await pickSet();
+  const [records, stats] = set
+    ? await Promise.all([local(`data/${set.key}/records.json`), local(`data/${set.key}/stats.json`)])
+    : [];
+  if (!records) return setView('<p class="msg">No season data yet.</p>');
+
+  const cat = RECORDS.find(c => c.id === catId) || RECORDS[0];
+  const list = records[cat.id] || [];
+  // Tied values share a rank.
+  const body = list.map((r, i) => `
+    <tr class="link" data-game="${esc(r.g)}">
+      <td class="rk">${i && list[i - 1].v === r.v ? '' : i + 1}</td>
+      <td class="tm">${playerLink(r.id, r.n)}<span class="sub">${esc(stats?.teams[r.t]?.abbr)}</span></td>
+      <td class="v">${cat.id === 'pm' && r.v > 0 ? '+' : ''}${r.v}</td>
+      <td>${esc(shortDate(r.d))}</td></tr>`).join('');
+
+  setView(`
+    ${setChips(sets, set)}
+    <div class="chips">${RECORDS.map(c =>
+      `<button data-cat="${c.id}" class="${c.id === cat.id ? 'on' : ''}">${c.label}</button>`).join('')}</div>
+    ${list.length ? `
+    <table class="tbl lead rec">
+      <colgroup><col class="rk"><col><col class="v"><col class="dt"></colgroup>
+      <thead><tr><th class="rk">#</th><th class="l">Player</th><th>${cat.label}</th><th>Date</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>` : '<p class="msg">No games played yet.</p>'}
+    <p class="note">${esc(set.label)} · best single games · tap a row for the box score · updated ${ago(records.updated)}</p>`);
+  app.querySelectorAll('[data-cat]').forEach(b =>
+    b.onclick = () => { location.hash = '#/records/' + b.dataset.cat; });
+  bindRows('game', id => '#/g/' + id);
+  bindSetChips(() => showRecords(cat.id));
+}
+
+// ---------- player ----------
+
+const athleteP = new Map();
+function loadAthlete(id) {
+  if (!athleteP.has(id)) {
+    athleteP.set(id, getJSON(`https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/${id}`)
+      .then(d => d.athlete).catch(() => null));
+  }
+  return athleteP.get(id);
+}
+
+// Shows the remembered season set, or one the player has played in if they
+// haven't played in that one (e.g. arriving from a preseason box score).
+// Renders from our data first; ESPN's athlete profile (full name, headshot)
+// fills in the header when it arrives.
+async function showPlayer(id, setKey) {
+  loading();
+  const here = location.hash;
+  const { sets, set: picked } = await pickSet();
+  const allStats = await Promise.all(sets.map(s => local(`data/${s.key}/stats.json`)));
+  const has = i => allStats[i] && Object.values(allStats[i].players).some(p => p.id === id);
+  let i = sets.findIndex(s => s.key === setKey);
+  if (i < 0) {
+    i = sets.indexOf(picked);
+    if (!has(i)) i = sets.map((s, j) => j).reverse().find(has) ?? i;
+  }
+  const set = sets[i];
+  const stats = allStats[i];
+  if (location.hash !== here) return;
+
+  const players = stats ? combinePlayers(stats) : new Map();
+  const p = players.get(id);
+  const team = p ? stats.teams[p.t] : null;
+
+  let table = `<p class="msg">No ${esc(set?.label?.toLowerCase() || 'season')} games played yet.</p>`;
+  if (p) {
+    const teamGames = teamGamesOf(stats);
+    const all = [...players.values()];
+    // Rank = 1 + qualified players ahead of them, so non-qualifiers still
+    // get the spot they'd hold (marked *).
+    const rank = (cat, pool, v) => {
+      const vals = pool.filter(q => qualifies(q, cat, teamGames)).map(cat.val).filter(Number.isFinite);
+      return { r: 1 + vals.filter(x => x > v).length, of: vals.length };
+    };
+    const rankCell = (x, ok) => `${x.r}${ok ? '' : '*'}<span class="sub">/ ${x.of}</span>`;
+    const rows = LEADERS.map(cat => {
+      const v = cat.val(p);
+      if (!Number.isFinite(v)) return `<tr><td class="l">${cat.label}</td><td class="v">–</td><td>–</td><td>–</td></tr>`;
+      const ok = qualifies(p, cat, teamGames);
+      return `<tr><td class="l">${cat.label}</td><td class="v">${v.toFixed(1)}</td>
+        <td>${rankCell(rank(cat, all, v), ok)}</td>
+        <td>${rankCell(rank(cat, all.filter(q => q.t === p.t), v), ok)}</td></tr>`;
+    }).join('');
+    table = `
+      <table class="tbl prank">
+        <colgroup><col><col class="v"><col class="r"><col class="r"></colgroup>
+        <thead><tr><th class="l">Per game</th><th></th><th>League</th><th>${esc(team?.abbr || 'Team')}</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="note">${esc(set.label)} · ${p.gp} GP · ${per(p.min, p.gp)} MIN · ranked among qualified players (same rules as Leaders)${
+        LEADERS.some(c => !qualifies(p, c, teamGames)) ? ' · * not qualified, shows where they would rank' : ''}</p>`;
+  }
+
+  const head = ath => {
+    const meta = [team?.name || ath?.team?.displayName, ath?.jersey && '#' + ath.jersey, ath?.position?.abbreviation]
+      .filter(Boolean).join(' · ');
+    return `
+      <img class="${ath?.headshot ? 'face' : ''}" src="${esc(ath?.headshot?.href || team?.logo || '')}" alt="">
+      <div><div class="nm">${esc(ath?.displayName || p?.n || 'Player')}</div>
+        <div class="rec">${p ? `<a href="#/team/${esc(p.t)}">${esc(meta)}</a>` : esc(meta)}</div></div>`;
+  };
+  setView(`
+    <div class="teamhead">${head(null)}</div>
+    ${set ? setChips(sets, set) : ''}
+    ${table}`);
+  bindSetChips(key => showPlayer(id, key));
+  const ath = await loadAthlete(id);
+  const el = app.querySelector('.teamhead');
+  if (ath && location.hash === here && el) el.innerHTML = head(ath);
 }
 
 // ---------- teams ----------
@@ -448,7 +594,7 @@ async function showTeam(id) {
   const col = TEAM_COLS[teamSort];
   players.sort((a, b) => col.val(b) - col.val(a));
 
-  const rows = players.map(p => `<tr><td title="${esc(p.n)}">${esc(p.n)}</td>${TEAM_COLS.map(c => {
+  const rows = players.map(p => `<tr><td>${playerLink(p.id, p.n)}</td>${TEAM_COLS.map(c => {
     const v = c.val(p);
     return `<td>${c.fmt ? c.fmt(v, p) : v.toFixed(1)}</td>`;
   }).join('')}</tr>`).join('');
@@ -477,6 +623,7 @@ const TABS = [
   { id: 'games', href: '#/', label: 'Games', icon: '<path d="M4 5h16v15H4zM4 9h16M8 3v4M16 3v4"/>' },
   { id: 'standings', href: '#/standings', label: 'Standings', icon: '<path d="M5 20V10M12 20V4M19 20v-7"/>' },
   { id: 'leaders', href: '#/leaders', label: 'Leaders', icon: '<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/>' },
+  { id: 'records', href: '#/records', label: 'Records', icon: '<circle cx="12" cy="9" r="6"/><path d="M8.5 14 7 22l5-3 5 3-1.5-8"/>' },
   { id: 'teams', href: '#/teams', label: 'Teams', icon: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M15 20a4.5 4.5 0 0 1 6.5-4"/>' },
 ];
 
@@ -488,7 +635,7 @@ document.body.append(nav);
 
 function route() {
   const [, kind, arg] = location.hash.split('/');
-  const tab = { g: 'games', d: 'games', standings: 'standings', leaders: 'leaders', teams: 'teams', team: 'teams' }[kind] || 'games';
+  const tab = { g: 'games', d: 'games', standings: 'standings', leaders: 'leaders', records: 'records', teams: 'teams', team: 'teams', player: '' }[kind] ?? 'games';
   nav.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
 
   if (kind === 'g' && arg) {
@@ -499,6 +646,10 @@ function route() {
     showStandings();
   } else if (kind === 'leaders') {
     showLeaders(arg);
+  } else if (kind === 'records') {
+    showRecords(arg);
+  } else if (kind === 'player' && arg) {
+    showPlayer(arg);
   } else if (kind === 'teams') {
     showTeams();
   } else if (kind === 'team' && arg) {
