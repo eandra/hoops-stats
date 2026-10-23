@@ -7,6 +7,8 @@
   --accent: #f28c28;
   --pos: #4cc38a;
   --neg: #ef6b6b;
+  --hi: #3a3f4a;
+  --lhi: #2f6fe0;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -18,6 +20,8 @@
     --accent: #d9700f;
     --pos: #1f8a57;
     --neg: #c93c3c;
+    --hi: #e1e4ea;
+    --lhi: #2563eb;
   }
 }
 
@@ -133,10 +137,17 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
   color: var(--muted); font-size: .8em; text-transform: uppercase;
   letter-spacing: .05em; padding-top: .9em; text-align: left;
 }
-/* Season-high highlights: bold = player's season high (as of that game),
-   bold + underline = league-wide single-game high for the season. */
-.box td.hi { font-weight: 700; }
-.box td.lhi { font-weight: 700; text-decoration: underline; text-underline-offset: .2em; text-decoration-thickness: 1.5px; }
+/* Season-high highlights: a filled circle (a pill for "12-20") behind the
+   value. Gray = player's season high (as of that game), blue = league-wide
+   single-game high for the season. Negative margins cancel the padding so
+   the number stays aligned with the column and the tight columns don't widen. */
+.box .mk {
+  display: inline-block; min-width: 1.55em; padding: 0 .26em; margin: -.15em -.26em;
+  line-height: 1.55em; border-radius: 999px; text-align: center; font-weight: 600;
+}
+.box td:has(.mk) { overflow: visible; }
+.box td.hi .mk { background: var(--hi); }
+.box td.lhi .mk { background: var(--lhi); color: #fff; }
 .box td.pos { color: var(--pos); }
 .box td.neg { color: var(--neg); }
 .box tr.dnp td { color: var(--muted); }
@@ -144,8 +155,9 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
 .box tr.tot td { font-weight: 600; border-top: 2px solid var(--line); }
 
 .legend { color: var(--muted); font-size: 12px; margin: 10px 8px 0; line-height: 1.6; }
-.legend b { color: var(--text); }
-.legend u { color: var(--text); font-weight: 700; text-underline-offset: .2em; }
+.legend .dot { display: inline-block; width: .9em; height: .9em; border-radius: 50%; vertical-align: -.12em; margin-right: 4px; }
+.legend .dot.hi { background: var(--hi); }
+.legend .dot.lhi { background: var(--lhi); }
 .note { color: var(--muted); font-size: 12px; margin: 10px 8px 0; }
 
 /* Bottom tab bar */

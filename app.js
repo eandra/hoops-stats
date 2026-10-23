@@ -213,7 +213,7 @@ function renderGame() {
       ${teamHead(home)}
     </div>
     ${players.length ? `<div class="teamtabs">${tabs}</div>${boxTable(players[side], flags)}
-      <p class="legend"><b>Bold</b> = player's season high · <u>Underlined</u> = league season high</p>`
+      <p class="legend"><span class="dot hi"></span>Player's season high · <span class="dot lhi"></span>League season high</p>`
                      : '<p class="msg">Box score not available yet.</p>'}
   `);
   app.querySelectorAll('[data-side]').forEach(b =>
@@ -234,7 +234,8 @@ function boxTable(teamBlock, flags) {
       if (flags.l[id]?.includes(c.hk)) cls.push('lhi');
       else if (flags.p[id]?.includes(c.hk)) cls.push('hi');
     }
-    return `<td class="${cls.join(' ')}">${esc(v)}</td>`;
+    const mark = cls.includes('lhi') || cls.includes('hi');
+    return `<td class="${cls.join(' ')}">${mark ? `<span class="mk">${esc(v)}</span>` : esc(v)}</td>`;
   }).join('');
 
   const row = a => {
