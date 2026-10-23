@@ -26,6 +26,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 
 const ymd = d => d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
 const parseYmd = s => new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+// ESPN's schedule days are US Eastern, whatever the viewer's time zone.
+const etYmd = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
 const addDays = (s, n) => { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); };
 
 async function getJSON(url) {
@@ -87,6 +89,8 @@ async function showGames(date) {
   try {
     const data = await getJSON(`${API}/scoreboard?dates=${date}`);
     const events = data.events || [];
+    rememberDay(date, events);
+    lastDay = date;
     const list = events.length
       ? `<div class="games">${events.map(gameCard).join('')}</div>`
       : '<p class="msg">No games on this day.</p>';
@@ -137,18 +141,106 @@ function gameCard(ev) {
 
 // ---------- box score ----------
 
-let boxState = null; // { id, data, side, flags }
+let boxState = null; // { id, data, side, flags, nav }
+
+// Games of a day that have a box score (started), in schedule order, so
+// box scores can be swiped through like the Games list. Keyed by the date
+// the list was shown for.
+const dayGames = new Map();
+let lastDay = null;
+const rememberDay = (date, events) => dayGames.set(date, Promise.resolve(
+  events.filter(ev => ev.status.type.state !== 'pre').map(ev => ev.id)));
+function loadDay(date) {
+  if (!dayGames.has(date)) {
+    dayGames.set(date, getJSON(`${API}/scoreboard?dates=${date}`)
+      .then(d => (rememberDay(date, d.events || []), dayGames.get(date)))
+      .catch(e => { dayGames.delete(date); throw e; }));
+  }
+  return dayGames.get(date);
+}
+
+// The day list this game sits in: the one the user came from, else its own date.
+async function findNav(id, data) {
+  const own = etYmd(data.header.competitions[0].date);
+  for (const date of new Set([lastDay, own].filter(Boolean))) {
+    const ids = await loadDay(date).catch(() => []);
+    const i = ids.indexOf(id);
+    if (i >= 0) return { date, ids, i };
+  }
+  return null;
+}
 
 async function showGame(id) {
   loading();
   try {
     const data = await getJSON(`${API}/summary?event=${id}`);
-    boxState = { id, data, side: 0, flags: null };
+    boxState = { id, data, side: 0, flags: null, nav: null };
     renderGame();
-    boxState.flags = await loadFlags(id, data);
-    if (boxState?.id === id && boxState.flags) renderGame();
+    const [flags, nav] = await Promise.all([loadFlags(id, data), findNav(id, data)]);
+    if (boxState?.id !== id) return;
+    Object.assign(boxState, { flags, nav });
+    if (flags || nav) renderGame();
   } catch (e) { fail(e); }
 }
+
+// Step to the previous/next game of the day. Replaces the history entry so
+// Back returns to where the user was before the box scores.
+function stepGame(dir) {
+  const nav = boxState?.nav;
+  const id = nav?.ids[nav.i + dir];
+  if (!id) return false;
+  lastDay = nav.date;
+  location.replace('#/g/' + id);
+  return true;
+}
+
+// Swipe left/right on a box score for the next/previous game. The page
+// follows the finger, then slides out and the next game slides in.
+(() => {
+  let s = null;
+  const reset = () => { app.style.transition = 'transform .18s ease, opacity .18s ease'; app.style.transform = ''; app.style.opacity = ''; };
+  app.addEventListener('touchstart', e => {
+    s = null;
+    // The game flow chart uses horizontal drags for its readout.
+    if (!location.hash.startsWith('#/g/') || e.touches.length !== 1 || e.target.closest('.flow, .hscroll')) return;
+    s = { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null, dx: 0 };
+  }, { passive: true });
+  app.addEventListener('touchmove', e => {
+    if (!s) return;
+    const dx = e.touches[0].clientX - s.x, dy = e.touches[0].clientY - s.y;
+    if (!s.axis && Math.abs(dx) + Math.abs(dy) > 10) s.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y';
+    if (s.axis !== 'x') return;
+    const nav = boxState?.nav;
+    const can = nav && nav.ids[nav.i + (dx < 0 ? 1 : -1)];
+    s.dx = can ? dx : dx / 4; // resist where there's no game to go to
+    app.style.transition = 'none';
+    app.style.transform = `translateX(${s.dx}px)`;
+    app.style.opacity = String(1 - Math.min(Math.abs(s.dx) / 600, 0.4));
+  }, { passive: true });
+  app.addEventListener('touchend', () => {
+    if (!s || s.axis !== 'x') { s = null; return; }
+    const { dx } = s;
+    const dir = dx < 0 ? 1 : -1;
+    s = null;
+    const nav = boxState?.nav;
+    if (Math.abs(dx) < 70 || !nav?.ids[nav.i + dir]) return reset();
+    app.style.transition = 'transform .15s ease-in, opacity .15s ease-in';
+    app.style.transform = `translateX(${-dir * 100}%)`;
+    app.style.opacity = '0';
+    setTimeout(() => {
+      stepGame(dir);
+      app.style.transition = 'none';
+      app.style.transform = `translateX(${dir * 40}px)`;
+      requestAnimationFrame(() => requestAnimationFrame(reset));
+    }, 150);
+  });
+  app.addEventListener('touchcancel', () => { if (s?.axis === 'x') reset(); s = null; });
+  document.addEventListener('keydown', e => {
+    if (!location.hash.startsWith('#/g/') || e.altKey || e.metaKey || e.ctrlKey || e.target.closest('input')) return;
+    if (e.key === 'ArrowRight') stepGame(1);
+    else if (e.key === 'ArrowLeft') stepGame(-1);
+  });
+})();
 
 // Season-high flags for a game: { p: {athleteId: [hk…]}, l: {athleteId: [hk…]} }.
 // Games already processed by the data builder have a precomputed file; newer
@@ -346,7 +438,7 @@ function renderGame() {
   const status = comp.status.type;
   const away = comp.competitors.find(t => t.homeAway === 'away');
   const home = comp.competitors.find(t => t.homeAway === 'home');
-  const date = ymd(new Date(comp.date));
+  const date = etYmd(comp.date);
 
   const teamHead = t => `
     <a href="#/team/${t.team.id}" class="${status.completed && !t.winner ? 'loser' : ''}">
@@ -363,8 +455,15 @@ function renderGame() {
     `<button data-side="${i}" class="${i === side ? 'on' : ''}">${esc(p.team.abbreviation)}</button>`).join('');
 
   const tag = seasonTag(data.header.season?.type);
+  const nav = boxState.nav;
+  const pager = nav && nav.ids.length > 1 ? `
+    <span class="pager">
+      <button data-step="-1" aria-label="Previous game" ${nav.i ? '' : 'disabled'}>‹</button>
+      ${nav.i + 1} of ${nav.ids.length}
+      <button data-step="1" aria-label="Next game" ${nav.i < nav.ids.length - 1 ? '' : 'disabled'}>›</button>
+    </span>` : '';
   setView(`
-    <a class="back" href="#/d/${date}">‹ Games</a>
+    <div class="boxnav"><a class="back" href="#/d/${nav?.date || date}">‹ Games</a>${pager}</div>
     <div class="scorehead">
       ${teamHead(away)}
       <div class="mid">${esc(status.shortDetail)}${tag ? `<div class="tag">${tag}</div>` : ''}</div>
@@ -378,6 +477,7 @@ function renderGame() {
   `);
   app.querySelectorAll('[data-side]').forEach(b =>
     b.onclick = () => { boxState.side = +b.dataset.side; renderGame(); });
+  app.querySelectorAll('[data-step]').forEach(b => b.onclick = () => stepGame(+b.dataset.step));
   bindFlow(away, home);
 }
 
