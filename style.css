@@ -9,6 +9,8 @@
   --neg: #ef6b6b;
   --hi: #3a3f4a;
   --lhi: #2f6fe0;
+  --away: #3987e5;
+  --home: #e66767;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -22,6 +24,8 @@
     --neg: #c93c3c;
     --hi: #e1e4ea;
     --lhi: #2563eb;
+    --away: #2a78d6;
+    --home: #e34948;
   }
 }
 
@@ -94,6 +98,36 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
 .scorehead .pts { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .scorehead .mid { color: var(--muted); font-size: 12px; padding: 0 10px; }
 .scorehead .loser .pts { color: var(--muted); }
+
+/* Game flow: score margin over the game. Away lead above zero, home below. */
+.flow { position: relative; margin: 0 6px 10px; touch-action: pan-y; }
+.flow svg { display: block; font: 10px system-ui, -apple-system, sans-serif; user-select: none; }
+.flow .g { stroke: var(--line); stroke-width: 1; }
+.flow .q { stroke: var(--line); stroke-width: 1; }
+.flow .zero { stroke: var(--muted); stroke-width: 1; }
+.flow .tk { fill: var(--muted); font-variant-numeric: tabular-nums; }
+.flow .area { stroke: none; opacity: .14; }
+.flow .area.away, .flow .key .away, .flow .dot.away { fill: var(--away); }
+.flow .area.home, .flow .key .home, .flow .dot.home { fill: var(--home); }
+.flow .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.flow .ln.away { stroke: var(--away); }
+.flow .ln.home { stroke: var(--home); }
+.flow .dot { stroke: var(--bg); stroke-width: 2; }
+.flow .lab { fill: var(--text); font-weight: 600; font-size: 11px; }
+.flow .key text { fill: var(--muted); }
+.flow .xh { stroke: var(--text); stroke-width: 1; opacity: .5; }
+.flow .tip {
+  position: absolute; top: -6px; transform: translateY(-100%); pointer-events: none; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
+  font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.flow .tip b { margin-right: 6px; }
+.flow .tip span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tbl.linescore { width: auto; min-width: 60%; margin: 0 auto 4px; font-size: 13px; }
+.tbl.linescore th, .tbl.linescore td { padding: 4px 8px; text-align: center; }
+.tbl.linescore td.l { text-align: left; font-weight: 600; }
+.tbl.linescore tr.end td { color: var(--muted); font-size: 11px; }
+.flownote { text-align: center; margin: 0 8px 12px; }
 
 .teamtabs { display: flex; gap: 6px; margin: 0 6px 8px; }
 .teamtabs button {

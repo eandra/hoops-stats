@@ -182,6 +182,164 @@ async function loadFlags(id, data) {
   return flags;
 }
 
+// ---------- game flow ----------
+
+// Score margin over the game, from ESPN's play-by-play: away team's lead
+// above the zero line, home team's below. 12-minute quarters, 5-minute OTs.
+const periodStart = p => (p <= 4 ? (p - 1) * 720 : 2880 + (p - 5) * 300);
+const periodLen = p => (p <= 4 ? 720 : 300);
+const periodName = p => (p <= 4 ? `Q${p}` : p === 5 ? 'OT' : `${p - 4}OT`);
+const clockSecs = c => {
+  const [m, sec] = String(c ?? '0').includes(':') ? String(c).split(':') : [0, c];
+  return +m * 60 + parseFloat(sec || 0);
+};
+const fmtClock = secs => (secs >= 60
+  ? `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`
+  : secs.toFixed(secs % 1 ? 1 : 0));
+const periodAt = t => (t < 2880 ? Math.min(4, Math.floor(t / 720) + 1) : 5 + Math.floor((t - 2880) / 300));
+
+// Score changes as { t: seconds elapsed, a: away, h: home }, plus how far
+// the game has got (last play) and how many periods it has.
+function flowData(plays) {
+  const pts = [{ t: 0, a: 0, h: 0 }];
+  let end = 0, periods = 4;
+  for (const pl of plays || []) {
+    const p = pl.period?.number;
+    if (!p || pl.awayScore == null || pl.homeScore == null) continue;
+    const t = Math.max(end, periodStart(p) + periodLen(p) - clockSecs(pl.clock?.displayValue));
+    end = t;
+    periods = Math.max(periods, p);
+    const last = pts[pts.length - 1];
+    if (pl.awayScore !== last.a || pl.homeScore !== last.h) pts.push({ t, a: pl.awayScore, h: pl.homeScore });
+  }
+  return { pts, end, total: periodStart(periods) + periodLen(periods), periods };
+}
+
+const FLOW_H = 150;
+const FLOW_PAD = { l: 26, r: 8, t: 8, b: 20 };
+
+function flowChart(data, away, home, width) {
+  const f = flowData(data.plays);
+  if (f.pts.length < 2 || width < 200) return '';
+  const { pts, end, total, periods } = f;
+  const margin = p => p.a - p.h;
+  const maxLead = Math.max(...pts.map(margin)), minLead = Math.min(...pts.map(margin));
+  // Symmetric, with headroom for the biggest-lead labels, and at most two
+  // clean ticks per side.
+  const ymax = Math.max(maxLead, -minLead, 4) * 1.35;
+  const step = [5, 10, 20, 25].find(st => ymax / st < 3) || 50;
+  const { l, r, t: top, b } = FLOW_PAD;
+  const pw = width - l - r, ph = FLOW_H - top - b;
+  const x = s => l + s / total * pw;
+  const y = m => top + (ymax - m) / (2 * ymax) * ph;
+  const y0 = y(0);
+
+  let d = `M${x(0)},${y0}`;
+  for (const p of pts.slice(1)) d += `H${x(p.t).toFixed(1)}V${y(margin(p)).toFixed(1)}`;
+  d += `H${x(end).toFixed(1)}`;
+  const area = `${d}V${y0}Z`;
+
+  const grid = [];
+  for (let v = step; v <= ymax; v += step) {
+    for (const m of [v, -v]) {
+      grid.push(`<line class="g" x1="${l}" x2="${width - r}" y1="${y(m)}" y2="${y(m)}"/>`);
+      grid.push(`<text class="tk" x="${l - 5}" y="${y(m) + 3.5}" text-anchor="end">${v}</text>`);
+    }
+  }
+  const quarters = [];
+  for (let p = 1; p <= periods; p++) {
+    if (p > 1) quarters.push(`<line class="q" x1="${x(periodStart(p))}" x2="${x(periodStart(p))}" y1="${top}" y2="${FLOW_H - b}"/>`);
+    quarters.push(`<text class="tk" x="${x(periodStart(p) + periodLen(p) / 2)}" y="${FLOW_H - 5}" text-anchor="middle">${periodName(p)}</text>`);
+  }
+
+  // Each team's biggest lead: a dot where it first happened, labeled.
+  const leadMark = (sign, cls, abbr) => {
+    const best = sign > 0 ? maxLead : -minLead;
+    if (best <= 0) return '';
+    const p = pts.find(q => margin(q) * sign === best);
+    const cx = x(p.t), cy = y(margin(p));
+    // Label on the outer side of the dot, kept inside the plot.
+    const lx = Math.max(l + 22, Math.min(width - r - 22, cx));
+    return `<circle class="dot ${cls}" cx="${cx}" cy="${cy}" r="4"/>
+      <text class="lab" x="${lx}" y="${sign > 0 ? cy - 8 : cy + 15}" text-anchor="middle">${esc(abbr)} +${best}</text>`;
+  };
+
+  return `
+    <div class="flow" data-total="${total}" data-end="${end}">
+      <svg width="${width}" height="${FLOW_H}" role="img" aria-label="Score margin over the game">
+        <defs>
+          <clipPath id="fa"><rect x="0" y="0" width="${width}" height="${y0}"/></clipPath>
+          <clipPath id="fh"><rect x="0" y="${y0}" width="${width}" height="${FLOW_H}"/></clipPath>
+        </defs>
+        ${grid.join('')}${quarters.join('')}
+        <line class="zero" x1="${l}" x2="${width - r}" y1="${y0}" y2="${y0}"/>
+        <path class="area away" clip-path="url(#fa)" d="${area}"/>
+        <path class="area home" clip-path="url(#fh)" d="${area}"/>
+        <path class="ln away" clip-path="url(#fa)" d="${d}"/>
+        <path class="ln home" clip-path="url(#fh)" d="${d}"/>
+        <g class="key"><rect class="away" x="${l + 6}" y="${top + 4}" width="10" height="3" rx="1.5"/>
+          <text x="${l + 20}" y="${top + 9}">${esc(away.team.abbreviation)} leads</text>
+          <rect class="home" x="${l + 6}" y="${FLOW_H - b - 9}" width="10" height="3" rx="1.5"/>
+          <text x="${l + 20}" y="${FLOW_H - b - 4}">${esc(home.team.abbreviation)} leads</text></g>
+        ${leadMark(1, 'away', away.team.abbreviation)}${leadMark(-1, 'home', home.team.abbreviation)}
+        <line class="xh" x1="0" x2="0" y1="${top}" y2="${FLOW_H - b}" visibility="hidden"/>
+      </svg>
+      <div class="tip" hidden><b></b><span></span></div>
+    </div>`;
+}
+
+// Crosshair + readout: snaps to the score at the pointer's game time.
+function bindFlow(away, home) {
+  const box = app.querySelector('.flow');
+  if (!box) return;
+  const svg = box.querySelector('svg'), xh = box.querySelector('.xh'), tip = box.querySelector('.tip');
+  const { pts } = flowData(boxState.data.plays);
+  const total = +box.dataset.total, end = +box.dataset.end;
+  const pw = svg.width.baseVal.value - FLOW_PAD.l - FLOW_PAD.r;
+  const hide = () => { xh.setAttribute('visibility', 'hidden'); tip.hidden = true; };
+  svg.addEventListener('pointermove', e => {
+    const px = e.clientX - svg.getBoundingClientRect().left;
+    const t = Math.max(0, Math.min(end, (px - FLOW_PAD.l) / pw * total));
+    let p = pts[0];
+    for (const q of pts) { if (q.t <= t) p = q; else break; }
+    const per = periodAt(Math.min(t, total - 0.01));
+    const left = periodStart(per) + periodLen(per) - t;
+    const m = p.a - p.h;
+    const cx = FLOW_PAD.l + t / total * pw;
+    xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('visibility', 'visible');
+    tip.querySelector('b').textContent = m === 0 ? 'Tied' : `${m > 0 ? away.team.abbreviation : home.team.abbreviation} +${Math.abs(m)}`;
+    tip.querySelector('span').textContent = `${away.team.abbreviation} ${p.a}–${p.h} ${home.team.abbreviation} · ${periodName(per)} ${fmtClock(left)}`;
+    tip.hidden = false;
+    const w = tip.offsetWidth;
+    tip.style.left = `${Math.max(0, Math.min(box.clientWidth - w, cx - w / 2))}px`;
+  });
+  svg.addEventListener('pointerleave', hide);
+  svg.addEventListener('pointercancel', hide);
+}
+
+// Points per period, and the margin at the end of each.
+function lineScore(away, home, leadChanges) {
+  const per = t => (t.linescores || []).map(s => num(s.displayValue));
+  const a = per(away), h = per(home);
+  if (!a.length || a.length !== h.length) return '';
+  let ca = 0, ch = 0;
+  const ends = a.map((v, i) => {
+    ca += v; ch += h[i];
+    return ca === ch ? 'Tied' : `${ca > ch ? away.team.abbreviation : home.team.abbreviation} +${Math.abs(ca - ch)}`;
+  });
+  const head = a.map((v, i) => `<th>${periodName(i + 1)}</th>`).join('');
+  const row = (t, v) => `<tr><td class="l">${esc(t.team.abbreviation)}</td>${v.map(x => `<td>${x}</td>`).join('')}<td class="v">${esc(t.score ?? '')}</td></tr>`;
+  return `
+    <table class="tbl linescore">
+      <thead><tr><th></th>${head}<th>T</th></tr></thead>
+      <tbody>${row(away, a)}${row(home, h)}
+        <tr class="end"><td class="l">After</td>${ends.map(e => `<td>${esc(e)}</td>`).join('')}<td></td></tr></tbody>
+    </table>
+    ${leadChanges != null ? `<p class="note flownote">Lead changes: ${esc(leadChanges)}</p>` : ''}`;
+}
+
+const num = v => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; };
+
 function renderGame() {
   const { data, side, flags } = boxState;
   const comp = data.header.competitions[0];
@@ -212,12 +370,15 @@ function renderGame() {
       <div class="mid">${esc(status.shortDetail)}${tag ? `<div class="tag">${tag}</div>` : ''}</div>
       ${teamHead(home)}
     </div>
+    ${flowChart(data, away, home, Math.min(app.clientWidth, 760) - 12)}
+    ${lineScore(away, home, data.boxscore.teams?.[0]?.statistics?.find(s => s.name === 'leadChanges')?.displayValue)}
     ${players.length ? `<div class="teamtabs">${tabs}</div>${boxTable(players[side], flags)}
       <p class="legend"><span class="dot hi"></span>Player's season high · <span class="dot lhi"></span>League season high</p>`
                      : '<p class="msg">Box score not available yet.</p>'}
   `);
   app.querySelectorAll('[data-side]').forEach(b =>
     b.onclick = () => { boxState.side = +b.dataset.side; renderGame(); });
+  bindFlow(away, home);
 }
 
 function boxTable(teamBlock, flags) {
@@ -748,6 +909,13 @@ function route() {
 }
 
 window.addEventListener('hashchange', route);
+// The game flow chart is drawn at the screen's width.
+let resizeQueued = false;
+window.addEventListener('resize', () => {
+  if (resizeQueued || !location.hash.startsWith('#/g/') || !boxState) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => { resizeQueued = false; if (location.hash.startsWith('#/g/') && boxState) renderGame(); });
+});
 route();
 
 if ('serviceWorker' in navigator) {
