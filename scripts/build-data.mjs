@@ -5,16 +5,19 @@
 //   data/<year>-<type>/highs.json      – current per-player and league single-game highs
 //   data/<year>-<type>/records.json    – top single-game lines per stat (records tab)
 //   data/<year>-<type>/flags/<id>.json – which stats were season highs in that game
-//   data/<year>-<type>/state.json      – processed game ids (internal)
+//   data/<year>-<type>/games/<id>.json – each game's parsed box score (internal)
 //
-// Incremental: each run only fetches box scores of games not yet processed.
-// Games are processed in start-time order so "season high" means
-// "as of that game". Node 18+, no dependencies.
+// Each run fetches box scores of new games, and re-fetches the last
+// RECHECK_DAYS days of games because ESPN sometimes corrects box scores
+// after the fact. Everything else is then rebuilt from the saved games, in
+// start-time order so "season high" means "as of that game", so a
+// correction fixes totals, highs, records and flags alike.
+// Node 18+, no dependencies.
 //
 // Env overrides (for testing against a past season):
 //   DATA_DIR=/tmp/x  SEASON_DATE=20251201  UNTIL=20251110
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +30,9 @@ const TYPE_LABEL = { 1: 'Preseason', 2: 'Regular Season', 3: 'Playoffs', 5: 'Pla
 // Stats tracked for season highs, in this order everywhere.
 export const HIGH_KEYS = ['pts', 'reb', 'ast', 'blk', 'stl', 'pm', 'fgm', 'tpm', 'ftm'];
 const RECORDS_TOP = 20;
+const RECHECK_DAYS = 3; // today and the two days before
+const LINE_KEYS = ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+const TEAM_KEYS = ['reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 
 async function getJSON(url, tries = 3) {
   for (let i = 1; ; i++) {
@@ -66,152 +72,153 @@ function parseLine(keys, stats) {
   };
 }
 
-// Load (or start) the accumulated data for one season set.
-async function loadSet(key) {
-  const dir = join(ROOT, key);
-  return {
-    key, dir,
-    state: await readJSON(join(dir, 'state.json'), { processed: [], firstDate: null }),
-    stats: await readJSON(join(dir, 'stats.json'), { teams: {}, players: {} }),
-    highs: await readJSON(join(dir, 'highs.json'), { players: {}, league: {} }),
-    records: await readJSON(join(dir, 'records.json'), null),
-  };
-}
-
-// Player lines from a box score (players who actually played).
-function gameLines(summary) {
+// One game from an ESPN summary, reduced to what the builder needs.
+// Teams are those with box score stats (as before, for games played).
+function parseGame(summary, id, day) {
+  const comps = summary.header?.competitions?.[0]?.competitors || [];
+  const teams = [];
   const lines = [];
   for (const block of summary.boxscore?.players || []) {
+    const team = block.team;
     const st = block.statistics?.[0];
     if (!st) continue;
-    for (const a of st.athletes || []) {
-      if (a.didNotPlay || !a.stats?.length) continue;
-      const line = parseLine(st.keys, a.stats);
-      if (!line.min && !line.pts && !line.reb && !line.ast) continue;
-      lines.push({ id: a.athlete.id, name: a.athlete.shortName || a.athlete.displayName, team: block.team.id, line });
-    }
-  }
-  return lines;
-}
-
-const TEAM_KEYS = ['w', 'l', 'pts', 'opp', 'reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
-
-// Count a game for both teams: games played (as before), plus team totals
-// from the box score's team section, which includes team rebounds and turnovers.
-function addTeamGame(teams, summary) {
-  const comps = summary.header?.competitions?.[0]?.competitors || [];
-  for (const block of summary.boxscore?.players || []) {
-    const team = block.team;
-    if (!block.statistics?.[0]) continue;
-    const t = teams[team.id] ||= { abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo, gp: 0 };
-    t.gp++;
-    for (const k of TEAM_KEYS) t[k] ??= 0;
     const me = comps.find(c => c.team.id === team.id);
     const them = comps.find(c => c.team.id !== team.id);
-    if (me && them) {
-      t.pts += num(me.score); t.opp += num(them.score);
-      if (me.winner) t.w++; else if (them.winner) t.l++;
-    }
     const ts = summary.boxscore.teams?.find(x => x.team.id === team.id)?.statistics || [];
     const v = name => ts.find(x => x.name === name)?.displayValue;
     const [fgm, fga] = split(v('fieldGoalsMade-fieldGoalsAttempted'));
     const [tpm, tpa] = split(v('threePointFieldGoalsMade-threePointFieldGoalsAttempted'));
     const [ftm, fta] = split(v('freeThrowsMade-freeThrowsAttempted'));
-    Object.entries({
-      reb: num(v('totalRebounds')), oreb: num(v('offensiveRebounds')), ast: num(v('assists')),
-      stl: num(v('steals')), blk: num(v('blocks')), to: num(v('totalTurnovers') ?? v('turnovers')),
-      fgm, fga, tpm, tpa, ftm, fta,
-    }).forEach(([k, x]) => { t[k] += x; });
+    teams.push({
+      id: team.id, abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo,
+      pts: num(me?.score), opp: num(them?.score), w: !!me?.winner, l: !!them?.winner,
+      // The team section includes team rebounds and turnovers.
+      s: {
+        reb: num(v('totalRebounds')), oreb: num(v('offensiveRebounds')), ast: num(v('assists')),
+        stl: num(v('steals')), blk: num(v('blocks')), to: num(v('totalTurnovers') ?? v('turnovers')),
+        fgm, fga, tpm, tpa, ftm, fta,
+      },
+    });
+    for (const a of st.athletes || []) {
+      if (a.didNotPlay || !a.stats?.length) continue;
+      const line = parseLine(st.keys, a.stats);
+      if (!line.min && !line.pts && !line.reb && !line.ast) continue;
+      lines.push({ id: a.athlete.id, n: a.athlete.shortName || a.athlete.displayName, t: team.id, ...line });
+    }
   }
+  return { id, d: day, at: summary.header?.competitions?.[0]?.date || '', teams, lines };
 }
 
 // NBA efficiency for one game line.
 const effOf = l => l.pts + l.reb + l.ast + l.stl + l.blk - (l.fga - l.fgm) - (l.fta - l.ftm) - l.to;
 
 // Fold a game's lines into the per-stat top lists. Ties keep the earlier game.
-function addRecords(records, lines, gameId, date) {
+function addRecords(records, g) {
   for (const k of HIGH_KEYS) {
     const list = records[k] ||= [];
-    for (const { id, name, team, line } of lines) {
-      const v = line[k];
+    for (const l of g.lines) {
+      const v = l[k];
       if (v <= 0 || (list.length >= RECORDS_TOP && v <= list[list.length - 1].v)) continue;
-      list.push({ v, id, n: name, t: team, g: gameId, d: date });
+      list.push({ v, id: l.id, n: l.n, t: l.t, g: g.id, d: g.d });
       list.sort((a, b) => b.v - a.v || a.d.localeCompare(b.d) || a.g.localeCompare(b.g));
       list.length = Math.min(list.length, RECORDS_TOP);
     }
   }
 }
 
+// Everything published for a season set, from its saved games.
+function build(games) {
+  const stats = { teams: {}, players: {} };
+  const highs = { players: {}, league: {} };
+  const records = {};
+  const flags = {};
+  let firstDate = null;
+  const ordered = [...games.values()].sort((a, b) =>
+    a.d.localeCompare(b.d) || a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+
+  for (const g of ordered) {
+    // Flags are computed against highs from previous games only, so every
+    // player in this game is compared to the same baseline. League flags
+    // only once there are games from an earlier day to compare with.
+    const f = flags[g.id] = { p: {}, l: {} };
+    const leagueReady = firstDate && firstDate < g.d;
+    for (const l of g.lines) {
+      const prev = highs.players[l.id];
+      HIGH_KEYS.forEach((k, i) => {
+        const v = l[k];
+        if (v <= 0) return;
+        if (prev && v >= prev[i]) (f.p[l.id] ||= []).push(k);
+        const lg = highs.league[k];
+        if (leagueReady && lg && v >= lg.v) (f.l[l.id] ||= []).push(k);
+      });
+    }
+
+    for (const t of g.teams) {
+      const tt = stats.teams[t.id] ||= { abbr: t.abbr, name: t.name, logo: t.logo, gp: 0, w: 0, l: 0, pts: 0, opp: 0, ...Object.fromEntries(TEAM_KEYS.map(k => [k, 0])) };
+      tt.gp++;
+      tt.pts += t.pts; tt.opp += t.opp;
+      if (t.w) tt.w++; else if (t.l) tt.l++;
+      for (const k of TEAM_KEYS) tt[k] += t.s[k];
+    }
+
+    // Then fold this game into totals and highs. Totals are per stint
+    // (player:team) so traded players' teams stay right.
+    for (const l of g.lines) {
+      const p = stats.players[`${l.id}:${l.t}`] ||= { id: l.id, n: l.n, t: l.t, gp: 0, e2: 0, ...Object.fromEntries(LINE_KEYS.map(k => [k, 0])) };
+      p.n = l.n;
+      p.gp++;
+      for (const k of LINE_KEYS) p[k] += l[k];
+      p.e2 += effOf(l) ** 2;
+
+      const prev = highs.players[l.id];
+      highs.players[l.id] = HIGH_KEYS.map((k, i) => prev ? Math.max(prev[i], l[k]) : l[k]);
+      for (const k of HIGH_KEYS) {
+        const lg = highs.league[k];
+        if (!lg || l[k] > lg.v) highs.league[k] = { v: l[k], id: l.id, n: l.n, t: l.t, g: g.id, d: g.d };
+      }
+    }
+
+    addRecords(records, g);
+    firstDate ||= g.d;
+  }
+  return { stats, highs, records, flags };
+}
+
 // Game date (US Eastern, like ESPN's scoreboard days) from a summary.
 const summaryDate = summary => new Date(summary.header.competitions[0].date)
   .toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
 
-// records.json, team totals and players' e2 (sum of squared per-game EFF,
-// for its standard deviation) were added after some games were already
-// processed: rebuild whichever is missing once from those games' box scores.
-async function backfill(set) {
-  const records = !set.records;
-  const teams = Object.values(set.stats.teams).some(t => t.pts == null);
-  const e2 = Object.values(set.stats.players).some(p => p.e2 == null);
-  if (!records && !teams && !e2) return;
-  if (records) set.records = {};
-  if (teams) set.stats.teams = {};
-  if (e2) for (const p of Object.values(set.stats.players)) p.e2 = 0;
-  for (const id of set.state.processed) {
-    const summary = await getJSON(`${API}/summary?event=${id}`);
-    const lines = gameLines(summary);
-    if (records) addRecords(set.records, lines, id, summaryDate(summary));
-    if (teams) addTeamGame(set.stats.teams, summary);
-    if (e2) for (const l of lines) {
-      const p = set.stats.players[`${l.id}:${l.team}`];
-      if (p) p.e2 += effOf(l.line) ** 2;
-    }
+const ymdAdd = (s, n) => {
+  const d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8) + n));
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+};
+
+// Saved games for one season set. Sets built before games were saved only
+// have state.json's list of game ids: fetch those once to fill the cache.
+async function loadSet(key) {
+  const dir = join(ROOT, key);
+  const games = new Map();
+  const files = await readdir(join(dir, 'games')).catch(() => []);
+  for (const f of files) {
+    if (f.endsWith('.json')) { const g = await readJSON(join(dir, 'games', f)); games.set(g.id, g); }
   }
-  const what = [records && 'records', teams && 'team totals', e2 && 'EFF spread'].filter(Boolean).join(', ');
-  console.log(`Backfilled ${what} for ${set.key} from ${set.state.processed.length} game(s).`);
+  const set = { key, dir, games, changed: false };
+  const state = await readJSON(join(dir, 'state.json'), null);
+  if (state) {
+    for (const id of state.processed.filter(id => !games.has(id))) {
+      const summary = await getJSON(`${API}/summary?event=${id}`);
+      await saveGame(set, parseGame(summary, id, summaryDate(summary)));
+    }
+    await rm(join(dir, 'state.json'));
+    set.changed = true;
+    console.log(`Saved ${state.processed.length} existing game(s) for ${key}.`);
+  }
+  return set;
 }
 
-function processGame(set, summary, gameId, date) {
-  const flags = { p: {}, l: {} };
-  // League flags only once there are games from an earlier day to compare with.
-  const leagueReady = set.state.firstDate && set.state.firstDate < date;
-  const lines = gameLines(summary);
-  addTeamGame(set.stats.teams, summary);
-
-  // Flags are computed against highs from previous games only, so every
-  // player in this game is compared to the same baseline.
-  for (const { id, line } of lines) {
-    const prev = set.highs.players[id];
-    HIGH_KEYS.forEach((k, i) => {
-      const v = line[k];
-      if (v <= 0) return;
-      if (prev && v >= prev[i]) (flags.p[id] ||= []).push(k);
-      const lg = set.highs.league[k];
-      if (leagueReady && lg && v >= lg.v) (flags.l[id] ||= []).push(k);
-    });
-  }
-
-  // Then fold this game into totals and highs.
-  for (const { id, name, team, line } of lines) {
-    const key = `${id}:${team}`;
-    const p = set.stats.players[key] ||= { id, n: name, t: team, gp: 0, e2: 0, min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, to: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0 };
-    p.n = name;
-    p.gp++;
-    for (const k of ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta']) p[k] += line[k];
-    p.e2 += effOf(line) ** 2;
-
-    const prev = set.highs.players[id];
-    set.highs.players[id] = HIGH_KEYS.map((k, i) => prev ? Math.max(prev[i], line[k]) : line[k]);
-    for (const k of HIGH_KEYS) {
-      const lg = set.highs.league[k];
-      if (!lg || line[k] > lg.v) set.highs.league[k] = { v: line[k], id, n: name, t: team, g: gameId, d: date };
-    }
-  }
-
-  addRecords(set.records, lines, gameId, date);
-  set.state.firstDate ||= date;
-  set.state.processed.push(gameId);
-  return flags;
+async function saveGame(set, g) {
+  set.games.set(g.id, g);
+  await writeJSON(join(set.dir, 'games', `${g.id}.json`), g);
 }
 
 async function main() {
@@ -221,58 +228,55 @@ async function main() {
   const index = await readJSON(join(ROOT, 'index.json'), {});
   if (index.year !== year) Object.assign(index, { year, label: league.season.displayName, sets: {}, checked: [] });
 
-  // Game days up to today that we haven't fully processed yet. The last two
-  // checked days are always rechecked in case games finished after the last run.
+  // Game days up to today that aren't done yet (some game wasn't final when
+  // last checked), plus the recent days whose box scores may still be corrected.
   const today = process.env.UNTIL || new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const recheckFrom = ymdAdd(today, 1 - RECHECK_DAYS);
   const days = (league.calendar || [])
     .map(d => (typeof d === 'string' ? d : d.startDate).slice(0, 10).replace(/-/g, ''))
     .filter(d => d <= today);
-  const done = new Set(index.checked.slice(0, -2));
-  const todo = days.filter(d => !done.has(d));
+  const done = new Set(index.checked);
+  const todo = days.filter(d => !done.has(d) || d >= recheckFrom);
 
   const sets = {};
-  const getSet = async key => {
-    if (!sets[key]) {
-      const set = await loadSet(key);
-      await backfill(set);
-      sets[key] = set;
-    }
-    return sets[key];
-  };
+  const getSet = async key => (sets[key] ||= await loadSet(key));
   for (const key of Object.keys(index.sets)) await getSet(key);
-  let added = 0;
+  let added = 0, corrected = 0;
 
   for (const day of todo) {
     const sb = await getJSON(`${API}/scoreboard?dates=${day}`);
-    const events = (sb.events || []).sort((a, b) => a.date.localeCompare(b.date));
     let allFinal = true;
-    for (const ev of events) {
+    for (const ev of sb.events || []) {
       if (!ev.status.type.completed) { allFinal = false; continue; }
       const type = ev.season?.type ?? 2;
       const set = await getSet(`${year}-${type}`);
-      if (set.state.processed.includes(ev.id)) continue;
-      const summary = await getJSON(`${API}/summary?event=${ev.id}`);
-      const flags = processGame(set, summary, ev.id, day);
-      await writeJSON(join(set.dir, 'flags', `${ev.id}.json`), flags);
-      index.sets[set.key] = { year, type, label: TYPE_LABEL[type] || 'Season', games: set.state.processed.length };
-      added++;
-      console.log(`${day} ${ev.shortName} -> ${set.key}`);
+      const old = set.games.get(ev.id);
+      if (old && day < recheckFrom) continue;
+      const g = parseGame(await getJSON(`${API}/summary?event=${ev.id}`), ev.id, day);
+      if (old && JSON.stringify(old) === JSON.stringify(g)) continue;
+      await saveGame(set, g);
+      set.changed = true;
+      index.sets[set.key] = { year, type, label: TYPE_LABEL[type] || 'Season', games: set.games.size };
+      if (old) corrected++; else added++;
+      console.log(`${day} ${ev.shortName} -> ${set.key}${old ? ' (box score corrected)' : ''}`);
     }
-    // Days in the past with every game final never need checking again.
-    if (allFinal && day < today && !index.checked.includes(day)) index.checked.push(day);
+    // Days in the past with every game final only get rechecked while recent.
+    if (allFinal && day < today && !done.has(day)) { index.checked.push(day); done.add(day); }
   }
 
   for (const set of Object.values(sets)) {
+    if (!set.changed) continue;
+    const { stats, highs, records, flags } = build(set.games);
     const updated = new Date().toISOString();
-    await writeJSON(join(set.dir, 'state.json'), set.state);
-    await writeJSON(join(set.dir, 'stats.json'), { ...set.stats, updated });
-    await writeJSON(join(set.dir, 'highs.json'), { ...set.highs, keys: HIGH_KEYS, updated });
-    await writeJSON(join(set.dir, 'records.json'), { ...set.records, keys: HIGH_KEYS, updated });
+    await writeJSON(join(set.dir, 'stats.json'), { ...stats, updated });
+    await writeJSON(join(set.dir, 'highs.json'), { ...highs, keys: HIGH_KEYS, updated });
+    await writeJSON(join(set.dir, 'records.json'), { ...records, keys: HIGH_KEYS, updated });
+    for (const [id, f] of Object.entries(flags)) await writeJSON(join(set.dir, 'flags', `${id}.json`), f);
   }
   index.checked.sort();
   index.updated = new Date().toISOString();
   await writeJSON(join(ROOT, 'index.json'), index);
-  console.log(`Processed ${added} new game(s).`);
+  console.log(`Processed ${added} new and ${corrected} corrected game(s).`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
