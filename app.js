@@ -353,6 +353,11 @@ const per = (v, gp) => (gp ? (v / gp).toFixed(1) : '–');
 // NBA efficiency: PTS + REB + AST + STL + BLK − missed FG − missed FT − TO, per game.
 const eff = p => (p.pts + p.reb + p.ast + p.stl + p.blk - (p.fga - p.fgm) - (p.fta - p.ftm) - p.to) / p.gp;
 
+// Consistency: sample standard deviation of a player's per-game EFF, from
+// the sum of squared game EFFs (e2) the data builder keeps. Needs 2+ games.
+const effSd = p => (p.gp < 2 || p.e2 == null ? NaN
+  : Math.sqrt(Math.max(0, (p.e2 - p.gp * eff(p) ** 2) / (p.gp - 1))));
+
 const LEADERS = [
   { id: 'eff', label: 'EFF', val: eff },
   { id: 'pts', label: 'PTS', val: p => p.pts / p.gp },
@@ -366,7 +371,7 @@ const LEADERS = [
   { id: 'ftp', label: 'FT%', val: p => p.ftm / p.fta * 100, min: (p, g) => p.ftm >= 125 * g / 82 },
 ];
 
-const SUM_KEYS = ['gp', 'min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+const SUM_KEYS = ['gp', 'e2', 'min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 
 // Combine stints for traded players; `t` is their most recent team.
 function combinePlayers(stats) {
@@ -435,12 +440,13 @@ async function showEfficiency() {
 
   const teamGames = teamGamesOf(stats);
   const col = EFF_COLS[effSort];
+  // Best first (lowest for `asc` columns); no value sorts last.
+  const key = p => { const v = col.val(p); return Number.isFinite(v) ? (col.asc ? -v : v) : -Infinity; };
   const players = [...combinePlayers(stats).values()]
     .filter(p => qualifies(p, LEADERS[0], teamGames))
-    .sort((a, b) => col.val(b) - col.val(a));
+    .sort((a, b) => key(b) - key(a));
 
-  const rows = players.map((p, i) => `<tr class="link" data-player="${esc(p.id)}">
-    <td class="rk">${i + 1}</td>
+  const rows = players.map(p => `<tr class="link" data-player="${esc(p.id)}">
     <td>${esc(p.n)}</td>
     ${EFF_COLS.map(c => { const v = c.val(p); return `<td class="${c.label === 'EFF' ? 'v' : ''}">${c.fmt ? c.fmt(v, p) : v.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
 
@@ -448,12 +454,12 @@ async function showEfficiency() {
     ${setChips(sets, set)}
     ${players.length ? `
     <table class="tbl ps eff">
-      <colgroup><col class="rk"><col>${EFF_COLS.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
-      <thead><tr><th class="rk">#</th><th>Player</th>${EFF_COLS.map((c, i) =>
+      <colgroup><col>${EFF_COLS.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
+      <thead><tr><th>Player</th>${EFF_COLS.map((c, i) =>
         `<th data-sort="${i}" class="${i === effSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>` : '<p class="msg">No qualified players yet.</p>'}
-    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · players in ${Math.ceil(teamGames * 0.7)}+ games · tap a column to sort · updated ${ago(stats.updated)}</p>`);
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · players in ${Math.ceil(teamGames * 0.7)}+ games · tap a column to sort · updated ${ago(stats.updated)}</p>`);
   app.querySelectorAll('[data-sort]').forEach(th =>
     th.onclick = () => { effSort = +th.dataset.sort; showEfficiency(); });
   bindRows('player', id => '#/player/' + id);
@@ -653,8 +659,9 @@ const TEAM_COLS = [
 let teamSort = 2; // PTS
 
 // Efficiency tab: everyone listed meets the games minimum, so skip GP and MIN to fit a phone.
-const EFF_COLS = [...TEAM_COLS.slice(2), { label: 'EFF', cls: 'e', val: eff }];
-let effSort = EFF_COLS.length - 1; // EFF
+const EFF_COLS = [...TEAM_COLS.slice(2), { label: 'EFF', cls: 'e', val: eff },
+  { label: 'SD', cls: 'sd', val: effSd, fmt: v => (Number.isFinite(v) ? v.toFixed(1) : '–'), asc: true }];
+let effSort = EFF_COLS.length - 2; // EFF
 
 async function showTeam(id) {
   loading();

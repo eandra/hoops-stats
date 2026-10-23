@@ -125,6 +125,9 @@ function addTeamGame(teams, summary) {
   }
 }
 
+// NBA efficiency for one game line.
+const effOf = l => l.pts + l.reb + l.ast + l.stl + l.blk - (l.fga - l.fgm) - (l.fta - l.ftm) - l.to;
+
 // Fold a game's lines into the per-stat top lists. Ties keep the earlier game.
 function addRecords(records, lines, gameId, date) {
   for (const k of HIGH_KEYS) {
@@ -143,20 +146,29 @@ function addRecords(records, lines, gameId, date) {
 const summaryDate = summary => new Date(summary.header.competitions[0].date)
   .toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
 
-// records.json and team totals were added after some games were already
+// records.json, team totals and players' e2 (sum of squared per-game EFF,
+// for its standard deviation) were added after some games were already
 // processed: rebuild whichever is missing once from those games' box scores.
 async function backfill(set) {
   const records = !set.records;
   const teams = Object.values(set.stats.teams).some(t => t.pts == null);
-  if (!records && !teams) return;
+  const e2 = Object.values(set.stats.players).some(p => p.e2 == null);
+  if (!records && !teams && !e2) return;
   if (records) set.records = {};
   if (teams) set.stats.teams = {};
+  if (e2) for (const p of Object.values(set.stats.players)) p.e2 = 0;
   for (const id of set.state.processed) {
     const summary = await getJSON(`${API}/summary?event=${id}`);
-    if (records) addRecords(set.records, gameLines(summary), id, summaryDate(summary));
+    const lines = gameLines(summary);
+    if (records) addRecords(set.records, lines, id, summaryDate(summary));
     if (teams) addTeamGame(set.stats.teams, summary);
+    if (e2) for (const l of lines) {
+      const p = set.stats.players[`${l.id}:${l.team}`];
+      if (p) p.e2 += effOf(l.line) ** 2;
+    }
   }
-  console.log(`Backfilled ${[records && 'records', teams && 'team totals'].filter(Boolean).join(' and ')} for ${set.key} from ${set.state.processed.length} game(s).`);
+  const what = [records && 'records', teams && 'team totals', e2 && 'EFF spread'].filter(Boolean).join(', ');
+  console.log(`Backfilled ${what} for ${set.key} from ${set.state.processed.length} game(s).`);
 }
 
 function processGame(set, summary, gameId, date) {
@@ -182,10 +194,11 @@ function processGame(set, summary, gameId, date) {
   // Then fold this game into totals and highs.
   for (const { id, name, team, line } of lines) {
     const key = `${id}:${team}`;
-    const p = set.stats.players[key] ||= { id, n: name, t: team, gp: 0, min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, to: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0 };
+    const p = set.stats.players[key] ||= { id, n: name, t: team, gp: 0, e2: 0, min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, to: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0 };
     p.n = name;
     p.gp++;
     for (const k of ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta']) p[k] += line[k];
+    p.e2 += effOf(line) ** 2;
 
     const prev = set.highs.players[id];
     set.highs.players[id] = HIGH_KEYS.map((k, i) => prev ? Math.max(prev[i], line[k]) : line[k]);
