@@ -2,7 +2,11 @@
 name: Update data
 on:
   schedule:
-    - cron: '20 */3 * * *'   # every 3 hours
+    # Games end by ~1:30 am ET (05:30 UTC). Check every 20 min from 05:00 to
+    # 08:59 UTC (5-8 am in Lisbon in winter, 6-9 am in summer), since GitHub
+    # often delays or skips scheduled runs; nothing during the day. Off-the-hour
+    # minutes because the top of the hour is when GitHub is busiest.
+    - cron: '7,27,47 5-8 * * *'
   workflow_dispatch:
 permissions:
   contents: write

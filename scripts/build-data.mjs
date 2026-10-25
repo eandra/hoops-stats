@@ -242,6 +242,7 @@ async function main() {
   const getSet = async key => (sets[key] ||= await loadSet(key));
   for (const key of Object.keys(index.sets)) await getSet(key);
   let added = 0, corrected = 0;
+  let changed = Object.values(sets).some(s => s.changed);
 
   for (const day of todo) {
     const sb = await getJSON(`${API}/scoreboard?dates=${day}`);
@@ -261,7 +262,7 @@ async function main() {
       console.log(`${day} ${ev.shortName} -> ${set.key}${old ? ' (box score corrected)' : ''}`);
     }
     // Days in the past with every game final only get rechecked while recent.
-    if (allFinal && day < today && !done.has(day)) { index.checked.push(day); done.add(day); }
+    if (allFinal && day < today && !done.has(day)) { index.checked.push(day); done.add(day); changed = true; }
   }
 
   for (const set of Object.values(sets)) {
@@ -273,9 +274,12 @@ async function main() {
     await writeJSON(join(set.dir, 'records.json'), { ...records, keys: HIGH_KEYS, updated });
     for (const [id, f] of Object.entries(flags)) await writeJSON(join(set.dir, 'flags', `${id}.json`), f);
   }
-  index.checked.sort();
-  index.updated = new Date().toISOString();
-  await writeJSON(join(ROOT, 'index.json'), index);
+  // Leave index.json alone when nothing changed, so quiet runs don't commit.
+  if (changed || added || corrected) {
+    index.checked.sort();
+    index.updated = new Date().toISOString();
+    await writeJSON(join(ROOT, 'index.json'), index);
+  }
   console.log(`Processed ${added} new and ${corrected} corrected game(s).`);
 }
 
