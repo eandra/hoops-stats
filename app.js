@@ -851,9 +851,9 @@ async function showPlayer(id, setKey) {
     // get the spot they'd hold (marked *).
     const rank = (cat, pool, v) => {
       const vals = pool.filter(q => qualifies(q, cat, teamGames)).map(cat.val).filter(Number.isFinite);
-      return { r: 1 + vals.filter(x => x > v).length, of: vals.length };
+      return { r: 1 + vals.filter(x => x > v).length };
     };
-    const rankCell = (x, ok) => `${x.r}${ok ? '' : '*'}<span class="sub">/ ${x.of}</span>`;
+    const rankCell = (x, ok) => `${x.r}${ok ? '' : '*'}`;
     const rows = PLAYER_ROWS.map(cat => {
       const v = cat.val(p);
       if (!Number.isFinite(v)) return `<tr><td class="l">${cat.label}</td><td class="v">–</td><td>–</td><td>–</td></tr>`;

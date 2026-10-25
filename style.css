@@ -249,8 +249,7 @@ h2:first-child { margin-top: 4px; }
 .tbl.stand col.st { width: 2.8em; } .tbl.stand col.l10 { width: 3em; }
 .tbl.lead col.v { width: 3.6em; } .tbl.lead col.gp { width: 2.6em; }
 .tbl.rec col.dt { width: 4.4em; }
-.tbl.prank col.v { width: 3.6em; } .tbl.prank col.r { width: 5.2em; }
-.tbl.prank .sub { margin-left: 3px; font-size: 11px; }
+.tbl.prank col.v { width: 3.6em; } .tbl.prank col.r { width: 4.2em; }
 a.pl { cursor: pointer; }
 @media (hover: hover) { a.pl:hover { text-decoration: underline; } }
 
