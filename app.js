@@ -631,9 +631,6 @@ function bindSetChips(rerender) {
 const pct = (m, a) => (!a ? '–' : m === a ? '100' : (m / a * 100).toFixed(1));
 const per = (v, gp) => (gp ? (v / gp).toFixed(1) : '–');
 
-// Leader categories. Qualification follows the NBA's rules, prorated to
-// games played so far: 70% of team games for per-game stats, plus a
-// minimum number of makes for percentages (300 FG, 82 3P, 125 FT over 82 games).
 // NBA efficiency: PTS + REB + AST + STL + BLK − missed FG − missed FT − TO, per game.
 const eff = p => (p.pts + p.reb + p.ast + p.stl + p.blk - (p.fga - p.fgm) - (p.fta - p.ftm) - p.to) / p.gp;
 
@@ -642,6 +639,9 @@ const eff = p => (p.pts + p.reb + p.ast + p.stl + p.blk - (p.fga - p.fgm) - (p.f
 const effSd = p => (p.gp < 2 || p.e2 == null ? NaN
   : Math.sqrt(Math.max(0, (p.e2 - p.gp * eff(p) ** 2) / (p.gp - 1))));
 
+// Leader categories. Qualification follows the NBA's rules, prorated to
+// games played so far: 70% of team games for per-game stats, plus a
+// minimum number of makes for percentages (300 FG, 82 3P, 125 FT over 82 games).
 const LEADERS = [
   { id: 'eff', label: 'EFF', val: eff },
   { id: 'pts', label: 'PTS', val: p => p.pts / p.gp },
@@ -670,7 +670,11 @@ function combinePlayers(stats) {
 }
 
 const teamGamesOf = stats => Math.max(0, ...Object.values(stats.teams).map(t => t.gp));
-const qualifies = (p, cat, teamGames) => p.gp >= Math.ceil(teamGames * 0.7) && (!cat.min || cat.min(p, teamGames));
+// The games-played minimum only applies once teams have played QUALIFY_FROM
+// games; before that, missing one game would knock a player off every list.
+const QUALIFY_FROM = 10;
+const minGames = teamGames => (teamGames >= QUALIFY_FROM ? Math.ceil(teamGames * 0.7) : 1);
+const qualifies = (p, cat, teamGames) => p.gp >= minGames(teamGames) && (!cat.min || cat.min(p, teamGames));
 
 async function showLeaders(catId) {
   loading();
@@ -743,7 +747,7 @@ async function showEfficiency() {
         `<th data-sort="${i}" class="${i === effSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>` : '<p class="msg">No qualified players yet.</p>'}
-    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · players in ${Math.ceil(teamGames * 0.7)}+ games · tap a column to sort · updated ${ago(stats.updated)}</p>`);
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · ${minGames(teamGames) > 1 ? `players in ${minGames(teamGames)}+ games` : `all players until teams have played ${QUALIFY_FROM} games`} · tap a column to sort · updated ${ago(stats.updated)}</p>`);
   app.querySelectorAll('[data-sort]').forEach(th =>
     th.onclick = () => { effSort = +th.dataset.sort; showEfficiency(); });
   bindRows('player', id => '#/player/' + id);
