@@ -655,7 +655,7 @@ const LEADERS = [
   { id: 'ftp', label: 'FT%', val: p => p.ftm / p.fta * 100, min: (p, g) => p.ftm >= 125 * g / 82 },
 ];
 
-const SUM_KEYS = ['gp', 'e2', 'min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+const SUM_KEYS = ['gp', 'e2', 'min', 'pm', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 
 // Combine stints for traded players; `t` is their most recent team.
 function combinePlayers(stats) {
@@ -807,6 +807,15 @@ function loadAthlete(id) {
   return athleteP.get(id);
 }
 
+// Player page rows: the Leaders stats, then playing time, +/- and EFF.
+const PLAYER_ROWS = [
+  ...LEADERS.filter(c => c.id !== 'eff'),
+  { id: 'gp', label: 'GP', val: p => p.gp, fmt: v => String(v) },
+  { id: 'mpg', label: 'MPG', val: p => p.min / p.gp },
+  { id: 'pm', label: '+/-', val: p => (p.pm == null ? NaN : p.pm / p.gp), fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) },
+  LEADERS.find(c => c.id === 'eff'),
+];
+
 // Shows the remembered season set, or one the player has played in if they
 // haven't played in that one (e.g. arriving from a preseason box score).
 // Renders from our data first; ESPN's athlete profile (full name, headshot)
@@ -841,22 +850,22 @@ async function showPlayer(id, setKey) {
       return { r: 1 + vals.filter(x => x > v).length, of: vals.length };
     };
     const rankCell = (x, ok) => `${x.r}${ok ? '' : '*'}<span class="sub">/ ${x.of}</span>`;
-    const rows = LEADERS.map(cat => {
+    const rows = PLAYER_ROWS.map(cat => {
       const v = cat.val(p);
       if (!Number.isFinite(v)) return `<tr><td class="l">${cat.label}</td><td class="v">–</td><td>–</td><td>–</td></tr>`;
       const ok = qualifies(p, cat, teamGames);
-      return `<tr><td class="l">${cat.label}</td><td class="v">${v.toFixed(1)}</td>
+      return `<tr><td class="l">${cat.label}</td><td class="v">${cat.fmt ? cat.fmt(v) : v.toFixed(1)}</td>
         <td>${rankCell(rank(cat, all, v), ok)}</td>
         <td>${rankCell(rank(cat, all.filter(q => q.t === p.t), v), ok)}</td></tr>`;
     }).join('');
     table = `
       <table class="tbl prank">
         <colgroup><col><col class="v"><col class="r"><col class="r"></colgroup>
-        <thead><tr><th class="l">Per game</th><th></th><th>League</th><th>${esc(team?.abbr || 'Team')}</th></tr></thead>
+        <thead><tr><th class="l">Stat</th><th></th><th>League</th><th>${esc(team?.abbr || 'Team')}</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <p class="note">${esc(set.label)} · ${p.gp} GP · ${per(p.min, p.gp)} MIN · ranked among qualified players (same rules as Leaders)${
-        LEADERS.some(c => !qualifies(p, c, teamGames)) ? ' · * not qualified, shows where they would rank' : ''}</p>`;
+      <p class="note">${esc(set.label)} · ranked among qualified players (same rules as Leaders)${
+        PLAYER_ROWS.some(c => !qualifies(p, c, teamGames)) ? ' · * not qualified, shows where they would rank' : ''}</p>`;
   }
 
   const head = ath => {

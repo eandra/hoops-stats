@@ -31,8 +31,11 @@ const TYPE_LABEL = { 1: 'Preseason', 2: 'Regular Season', 3: 'Playoffs', 5: 'Pla
 // Stats tracked for season highs, in this order everywhere.
 export const HIGH_KEYS = ['pts', 'reb', 'ast', 'blk', 'stl', 'pm', 'fgm', 'tpm', 'ftm'];
 const RECORDS_TOP = 20;
+// Bump when the published files gain a field, to rebuild every set once
+// from its saved games.
+const BUILD = 2;
 const RECHECK_DAYS = 3; // today and the two days before
-const LINE_KEYS = ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
+const LINE_KEYS = ['min', 'pm', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 const TEAM_KEYS = ['reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 
 async function getJSON(url, tries = 3) {
@@ -205,8 +208,7 @@ async function loadSet(key) {
   for (const f of files) {
     if (f.endsWith('.json')) { const g = await readJSON(join(dir, 'games', f)); games.set(g.id, g); }
   }
-  // Rebuild sets whose output predates results.json.
-  const set = { key, dir, games, changed: !(await readJSON(join(dir, 'results.json'), null)) };
+  const set = { key, dir, games, changed: false };
   const state = await readJSON(join(dir, 'state.json'), null);
   if (state) {
     for (const id of state.processed.filter(id => !games.has(id))) {
@@ -245,6 +247,10 @@ async function main() {
   const sets = {};
   const getSet = async key => (sets[key] ||= await loadSet(key));
   for (const key of Object.keys(index.sets)) await getSet(key);
+  if (index.build !== BUILD) {
+    for (const set of Object.values(sets)) set.changed = true;
+    index.build = BUILD;
+  }
   let added = 0, corrected = 0;
   let changed = Object.values(sets).some(s => s.changed);
 
