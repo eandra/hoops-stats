@@ -141,7 +141,7 @@ function gameCard(ev) {
 
 // ---------- box score ----------
 
-let boxState = null; // { id, data, side, flags, nav }
+let boxState = null; // { id, data, side, flags, nav, results }
 
 // Games of a day that have a box score (started), in schedule order, so
 // box scores can be swiped through like the Games list. Keyed by the date
@@ -174,12 +174,14 @@ async function showGame(id) {
   loading();
   try {
     const data = await getJSON(`${API}/summary?event=${id}`);
-    boxState = { id, data, side: 0, flags: null, nav: null };
+    boxState = { id, data, side: 0, flags: null, nav: null, results: null };
     renderGame();
-    const [flags, nav] = await Promise.all([loadFlags(id, data), findNav(id, data)]);
+    const season = data.header?.season;
+    const [flags, nav, results] = await Promise.all([loadFlags(id, data), findNav(id, data),
+      season ? local(`data/${season.year}-${season.type}/results.json`) : null]);
     if (boxState?.id !== id) return;
-    Object.assign(boxState, { flags, nav });
-    if (flags || nav) renderGame();
+    Object.assign(boxState, { flags, nav, results });
+    if (flags || nav || results) renderGame();
   } catch (e) { fail(e); }
 }
 
@@ -432,6 +434,26 @@ function lineScore(away, home, leadChanges) {
 
 const num = v => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; };
 
+// A team's W-L and streak right after this game (before it, while it's
+// still being played). From our results data; games it doesn't have yet
+// (e.g. tonight's) are placed by date. Falls back to ESPN's record, no streak.
+function teamRecord(t, comp, results) {
+  const log = results?.teams[t.team.id];
+  if (!log) return t.record?.find(r => r.type === 'total')?.summary || '';
+  const date = etYmd(comp.date);
+  const i = log.findIndex(r => r[0] === boxState.id);
+  const res = i >= 0 ? log.slice(0, i + 1).map(r => r[2]) : log.filter(r => r[1] < date).map(r => r[2]);
+  if (i < 0 && comp.status.type.completed) {
+    const other = comp.competitors.find(c => c !== t);
+    if (t.winner || other?.winner) res.push(t.winner ? 'W' : 'L');
+  }
+  if (!res.length) return '0-0';
+  const w = res.filter(r => r === 'W').length;
+  let n = 0;
+  while (n < res.length && res[res.length - 1 - n] === res[res.length - 1]) n++;
+  return `${w}-${res.length - w} · ${res[res.length - 1]}${n}`;
+}
+
 function renderGame() {
   const { data, side, flags } = boxState;
   const comp = data.header.competitions[0];
@@ -445,6 +467,7 @@ function renderGame() {
       <img src="${esc(t.team.logos?.[0]?.href || '')}" alt="">
       <div class="abbr">${esc(t.team.abbreviation)}</div>
       <div class="pts">${esc(t.score ?? '')}</div>
+      <div class="rec">${esc(teamRecord(t, comp, boxState.results))}</div>
     </a>`;
 
   // Box score team blocks, ordered away then home to match the header.

@@ -4,6 +4,7 @@
 //   data/<year>-<type>/stats.json      – per-player and per-team season totals
 //   data/<year>-<type>/highs.json      – current per-player and league single-game highs
 //   data/<year>-<type>/records.json    – top single-game lines per stat (records tab)
+//   data/<year>-<type>/results.json    – each team's results in order (box score W-L and streak)
 //   data/<year>-<type>/flags/<id>.json – which stats were season highs in that game
 //   data/<year>-<type>/games/<id>.json – each game's parsed box score (internal)
 //
@@ -132,6 +133,7 @@ function build(games) {
   const highs = { players: {}, league: {} };
   const records = {};
   const flags = {};
+  const results = {}; // team id -> [[game id, date, 'W' | 'L'], …] in game order
   let firstDate = null;
   const ordered = [...games.values()].sort((a, b) =>
     a.d.localeCompare(b.d) || a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
@@ -158,6 +160,7 @@ function build(games) {
       tt.gp++;
       tt.pts += t.pts; tt.opp += t.opp;
       if (t.w) tt.w++; else if (t.l) tt.l++;
+      if (t.w || t.l) (results[t.id] ||= []).push([g.id, g.d, t.w ? 'W' : 'L']);
       for (const k of TEAM_KEYS) tt[k] += t.s[k];
     }
 
@@ -181,7 +184,7 @@ function build(games) {
     addRecords(records, g);
     firstDate ||= g.d;
   }
-  return { stats, highs, records, flags };
+  return { stats, highs, records, flags, results };
 }
 
 // Game date (US Eastern, like ESPN's scoreboard days) from a summary.
@@ -202,7 +205,8 @@ async function loadSet(key) {
   for (const f of files) {
     if (f.endsWith('.json')) { const g = await readJSON(join(dir, 'games', f)); games.set(g.id, g); }
   }
-  const set = { key, dir, games, changed: false };
+  // Rebuild sets whose output predates results.json.
+  const set = { key, dir, games, changed: !(await readJSON(join(dir, 'results.json'), null)) };
   const state = await readJSON(join(dir, 'state.json'), null);
   if (state) {
     for (const id of state.processed.filter(id => !games.has(id))) {
@@ -267,11 +271,12 @@ async function main() {
 
   for (const set of Object.values(sets)) {
     if (!set.changed) continue;
-    const { stats, highs, records, flags } = build(set.games);
+    const { stats, highs, records, flags, results } = build(set.games);
     const updated = new Date().toISOString();
     await writeJSON(join(set.dir, 'stats.json'), { ...stats, updated });
     await writeJSON(join(set.dir, 'highs.json'), { ...highs, keys: HIGH_KEYS, updated });
     await writeJSON(join(set.dir, 'records.json'), { ...records, keys: HIGH_KEYS, updated });
+    await writeJSON(join(set.dir, 'results.json'), { teams: results, updated });
     for (const [id, f] of Object.entries(flags)) await writeJSON(join(set.dir, 'flags', `${id}.json`), f);
   }
   // Leave index.json alone when nothing changed, so quiet runs don't commit.
