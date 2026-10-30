@@ -824,6 +824,140 @@ const PLAYER_ROWS = [
 // haven't played in that one (e.g. arriving from a preseason box score).
 // Renders from our data first; ESPN's athlete profile (full name, headshot)
 // fills in the header when it arrives.
+// ---------- player game log ----------
+
+// Chart series, in the validated categorical order (see style.css --s1…--s5).
+const LOG_SERIES = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['blk', 'BLK'], ['stl', 'STL']];
+
+// Game log rows from data/<set>/players/<id>.json, oldest first. Missed games
+// keep their place (game number) with every stat 0 and dnp set.
+function logRows(file) {
+  return (file?.games || []).map(([g, d, t, opp, ha, res, score, oppScore, v], i) => {
+    const r = { n: i + 1, g, d, t, opp, ha, res, score, oppScore, dnp: !v };
+    file.keys.forEach((k, j) => { r[k] = v ? v[j] : 0; });
+    return r;
+  });
+}
+
+const LOG_H = 170;
+const LOG_PAD = { l: 26, r: 8, t: 8, b: 20 };
+
+function logChart(rows, width) {
+  if (!rows.length || width < 200) return '';
+  const N = rows.length;
+  const { l, r, t: top, b } = LOG_PAD;
+  const pw = width - l - r, ph = LOG_H - top - b;
+  const max = Math.max(4, ...rows.flatMap(g => LOG_SERIES.map(([k]) => g[k])));
+  const step = [2, 5, 10, 20].find(st => max / st <= 4) || 25;
+  const ymax = Math.ceil(max / step) * step;
+  const x = n => (N === 1 ? l + pw / 2 : l + (n - 1) / (N - 1) * pw);
+  const y = v => top + (1 - v / ymax) * ph;
+
+  const grid = [];
+  for (let v = 0; v <= ymax; v += step) {
+    grid.push(`<line class="${v ? 'g' : 'zero'}" x1="${l}" x2="${width - r}" y1="${y(v)}" y2="${y(v)}"/>`,
+      `<text class="tk" x="${l - 5}" y="${y(v) + 3.5}" text-anchor="end">${v}</text>`);
+  }
+  const every = Math.ceil(N / 8);
+  for (const g of rows) {
+    if ((g.n - 1) % every === 0 || g.n === N) grid.push(`<text class="tk" x="${x(g.n)}" y="${LOG_H - 5}" text-anchor="middle">${g.n}</text>`);
+  }
+  // Missed games: a faint band, and the lines break there.
+  const slot = N > 1 ? pw / (N - 1) : pw;
+  const bands = rows.filter(g => g.dnp).map(g =>
+    `<rect class="dnpband" x="${x(g.n) - slot / 2}" y="${top}" width="${slot}" height="${ph}"/>`).join('');
+
+  const series = LOG_SERIES.map(([k], si) => {
+    let d = '', dots = '';
+    rows.forEach((g, i) => {
+      if (g.dnp) return;
+      const prevPlayed = i > 0 && !rows[i - 1].dnp, nextPlayed = i < N - 1 && !rows[i + 1].dnp;
+      d += `${prevPlayed ? 'L' : 'M'}${x(g.n).toFixed(1)},${y(g[k]).toFixed(1)}`;
+      // Dots where a line alone can't show the game: short logs, or a game between misses.
+      if (N <= 12 || (!prevPlayed && !nextPlayed)) dots += `<circle class="dot" cx="${x(g.n)}" cy="${y(g[k])}" r="4"/>`;
+    });
+    return `<g class="s${si + 1}"><path class="ln" d="${d}"/>${dots}</g>`;
+  }).join('');
+
+  return `
+    <div class="legend chartkey">${LOG_SERIES.map(([, label], si) => `<span><i class="s${si + 1}"></i>${label}</span>`).join('')}</div>
+    <div class="logchart" data-n="${N}">
+      <svg width="${width}" height="${LOG_H}" role="img" aria-label="Points, rebounds, assists, blocks and steals by game">
+        ${bands}${grid.join('')}${series}
+        <line class="xh" x1="0" x2="0" y1="${top}" y2="${LOG_H - b}" visibility="hidden"/>
+      </svg>
+      <div class="tip" hidden></div>
+    </div>`;
+}
+
+// Crosshair + readout for the game log chart: snaps to the nearest game.
+function bindLogChart(rows) {
+  const box = app.querySelector('.logchart');
+  if (!box) return;
+  const svg = box.querySelector('svg'), xh = box.querySelector('.xh'), tip = box.querySelector('.tip');
+  const N = rows.length, pw = svg.width.baseVal.value - LOG_PAD.l - LOG_PAD.r;
+  const hide = () => { xh.setAttribute('visibility', 'hidden'); tip.hidden = true; };
+  svg.addEventListener('pointermove', e => {
+    const px = e.clientX - svg.getBoundingClientRect().left - LOG_PAD.l;
+    const g = rows[N === 1 ? 0 : Math.max(0, Math.min(N - 1, Math.round(px / pw * (N - 1))))];
+    const cx = N === 1 ? LOG_PAD.l + pw / 2 : LOG_PAD.l + (g.n - 1) / (N - 1) * pw;
+    xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('visibility', 'visible');
+    tip.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'th';
+    head.textContent = `Game ${g.n} · ${shortDate(g.d)} ${g.ha} ${g.opp}`;
+    tip.append(head);
+    if (g.dnp) {
+      const row = document.createElement('div');
+      row.textContent = 'Did not play';
+      tip.append(row);
+    } else {
+      LOG_SERIES.forEach(([k, label], si) => {
+        const row = document.createElement('div');
+        const key = document.createElement('i'); key.className = `s${si + 1}`;
+        const v = document.createElement('b'); v.textContent = g[k];
+        row.append(key, v, ` ${label}`);
+        tip.append(row);
+      });
+    }
+    tip.hidden = false;
+    const w = tip.offsetWidth;
+    tip.style.left = `${Math.max(0, Math.min(box.clientWidth - w, cx - w / 2))}px`;
+  });
+  svg.addEventListener('pointerleave', hide);
+  svg.addEventListener('pointercancel', hide);
+}
+
+// Game log table, most recent first. Rows open the box score.
+const LOG_COLS = [
+  { label: 'PTS', cls: 'pts', v: g => g.pts },
+  { label: 'REB', cls: 's', v: g => g.reb },
+  { label: 'AST', cls: 's', v: g => g.ast },
+  { label: 'BLK', cls: 's', v: g => g.blk },
+  { label: 'STL', cls: 's', v: g => g.stl },
+  { label: 'FG', cls: 'sh', v: g => `${g.fgm}-${g.fga}` },
+  { label: '3P', cls: 'sh', v: g => `${g.tpm}-${g.tpa}` },
+  { label: 'FT', cls: 'sh', v: g => `${g.ftm}-${g.fta}` },
+  { label: 'TO', cls: 's', v: g => g.to },
+  { label: 'MIN', cls: 'min', v: g => g.min },
+  { label: '+/-', cls: 'pm', v: g => (g.pm > 0 ? '+' : '') + g.pm },
+];
+
+function logTable(rows) {
+  const body = [...rows].reverse().map(g => `
+    <tr class="link ${g.dnp ? 'dnp' : ''}" data-game="${esc(g.g)}">
+      <td><span class="opp">${esc(g.ha)} ${esc(g.opp)}</span><span class="when">${esc(shortDate(g.d))}${g.res ? ` · ${g.res} ${g.score}-${g.oppScore}` : ''}</span></td>
+      ${LOG_COLS.map(c => `<td class="${c.label === '+/-' && g.pm ? (g.pm > 0 ? 'pos' : 'neg') : ''}">${esc(c.v(g))}</td>`).join('')}</tr>`).join('');
+  return `
+    <h2>Game log</h2>
+    <table class="box gamelog">
+      <colgroup><col class="n">${LOG_COLS.map(c => `<col class="${c.cls}">`).join('')}</colgroup>
+      <thead><tr><th></th>${LOG_COLS.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="note">Most recent first · tap a game for its box score${rows.some(g => g.dnp) ? ' · grayed out = did not play' : ''}</p>`;
+}
+
 async function showPlayer(id, setKey) {
   loading();
   const here = location.hash;
@@ -842,6 +976,8 @@ async function showPlayer(id, setKey) {
   const players = stats ? combinePlayers(stats) : new Map();
   const p = players.get(id);
   const team = p ? stats.teams[p.t] : null;
+  const rows = p ? logRows(await local(`data/${set.key}/players/${id}.json`)) : [];
+  if (location.hash !== here) return;
 
   let table = `<p class="msg">No ${esc(set?.label?.toLowerCase() || 'season')} games played yet.</p>`;
   if (p) {
@@ -883,8 +1019,11 @@ async function showPlayer(id, setKey) {
   setView(`
     <div class="teamhead">${head(null)}</div>
     ${set ? setChips(sets, set) : ''}
-    ${table}`);
+    ${table}
+    ${rows.length ? `<h2>By game</h2>${logChart(rows, Math.min(app.clientWidth, 760) - 12)}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
+  bindLogChart(rows);
+  bindRows('game', g => '#/g/' + g);
   const ath = await loadAthlete(id);
   const el = app.querySelector('.teamhead');
   if (ath && location.hash === here && el) el.innerHTML = head(ath);

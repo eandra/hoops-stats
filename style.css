@@ -11,6 +11,8 @@
   --lhi: #2f6fe0;
   --away: #3987e5;
   --home: #e66767;
+  /* Categorical chart series, validated order (dark steps). */
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -26,6 +28,7 @@
     --lhi: #2563eb;
     --away: #2a78d6;
     --home: #e34948;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
   }
 }
 
@@ -137,6 +140,39 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
 .tbl.linescore td.l { text-align: left; font-weight: 600; }
 .tbl.linescore tr.end td { color: var(--muted); font-size: 11px; }
 .note.flownote { text-align: center; margin: 2px 8px 20px; }
+
+/* Player game log chart: shares the game flow chart's chrome. */
+.logchart { position: relative; margin: 0 6px 6px; touch-action: pan-y; }
+.logchart svg { display: block; font: 10px system-ui, -apple-system, sans-serif; user-select: none; }
+.logchart .g { stroke: var(--line); stroke-width: 1; }
+.logchart .zero { stroke: var(--muted); stroke-width: 1; }
+.logchart .tk { fill: var(--muted); font-variant-numeric: tabular-nums; }
+.logchart .dnpband { fill: var(--line); opacity: .6; }
+.logchart .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.logchart .dot { stroke: var(--bg); stroke-width: 2; }
+.logchart .xh { stroke: var(--text); stroke-width: 1; opacity: .5; }
+.logchart .s1 .ln, .chartkey i.s1, .logchart .tip i.s1 { stroke: var(--s1); background: var(--s1); }
+.logchart .s2 .ln, .chartkey i.s2, .logchart .tip i.s2 { stroke: var(--s2); background: var(--s2); }
+.logchart .s3 .ln, .chartkey i.s3, .logchart .tip i.s3 { stroke: var(--s3); background: var(--s3); }
+.logchart .s4 .ln, .chartkey i.s4, .logchart .tip i.s4 { stroke: var(--s4); background: var(--s4); }
+.logchart .s5 .ln, .chartkey i.s5, .logchart .tip i.s5 { stroke: var(--s5); background: var(--s5); }
+.logchart .s1 .dot { fill: var(--s1); } .logchart .s2 .dot { fill: var(--s2); } .logchart .s3 .dot { fill: var(--s3); }
+.logchart .s4 .dot { fill: var(--s4); } .logchart .s5 .dot { fill: var(--s5); }
+.chartkey { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 8px 6px; }
+.chartkey span, .logchart .tip div { display: flex; align-items: center; gap: 5px; }
+.chartkey i, .logchart .tip i { display: inline-block; width: 12px; height: 2px; border-radius: 1px; }
+.logchart .tip {
+  position: absolute; top: 4px; pointer-events: none; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px;
+  font-size: 12px; line-height: 1.5; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.logchart .tip .th { color: var(--muted); }
+.logchart .tip b { font-variant-numeric: tabular-nums; min-width: 1.4em; }
+.box.gamelog td:first-child { line-height: 1.2; }
+.box.gamelog .opp { display: block; font-weight: 600; }
+.box.gamelog .when { display: block; color: var(--muted); font-size: .8em; }
+.box.gamelog tr.link { cursor: pointer; }
+.box.gamelog tr.dnp td { color: var(--muted); }
 
 .teamtabs { display: flex; gap: 6px; margin: 0 6px 8px; }
 .teamtabs button {

@@ -5,6 +5,7 @@
 //   data/<year>-<type>/highs.json      – current per-player and league single-game highs
 //   data/<year>-<type>/records.json    – top single-game lines per stat (records tab)
 //   data/<year>-<type>/results.json    – each team's results in order (box score W-L and streak)
+//   data/<year>-<type>/players/<id>.json – a player's game log, missed games included
 //   data/<year>-<type>/flags/<id>.json – which stats were season highs in that game
 //   data/<year>-<type>/games/<id>.json – each game's parsed box score (internal)
 //
@@ -33,8 +34,9 @@ export const HIGH_KEYS = ['pts', 'reb', 'ast', 'blk', 'stl', 'pm', 'fgm', 'tpm',
 const RECORDS_TOP = 20;
 // Bump when the published files gain a field, to rebuild every set once
 // from its saved games.
-const BUILD = 2;
+const BUILD = 3;
 const RECHECK_DAYS = 3; // today and the two days before
+const LOG_KEYS = ['min', 'pts', 'reb', 'ast', 'blk', 'stl', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'to', 'pm'];
 const LINE_KEYS = ['min', 'pm', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 const TEAM_KEYS = ['reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 
@@ -82,6 +84,7 @@ function parseGame(summary, id, day) {
   const comps = summary.header?.competitions?.[0]?.competitors || [];
   const teams = [];
   const lines = [];
+  const dnp = {}; // team id -> ids of listed players who didn't play
   for (const block of summary.boxscore?.players || []) {
     const team = block.team;
     const st = block.statistics?.[0];
@@ -95,6 +98,7 @@ function parseGame(summary, id, day) {
     const [ftm, fta] = split(v('freeThrowsMade-freeThrowsAttempted'));
     teams.push({
       id: team.id, abbr: team.abbreviation, name: team.shortDisplayName || team.displayName, logo: team.logo,
+      ha: me?.homeAway,
       pts: num(me?.score), opp: num(them?.score), w: !!me?.winner, l: !!them?.winner,
       // The team section includes team rebounds and turnovers.
       s: {
@@ -104,13 +108,12 @@ function parseGame(summary, id, day) {
       },
     });
     for (const a of st.athletes || []) {
-      if (a.didNotPlay || !a.stats?.length) continue;
-      const line = parseLine(st.keys, a.stats);
-      if (!line.min && !line.pts && !line.reb && !line.ast) continue;
+      const line = !a.didNotPlay && a.stats?.length ? parseLine(st.keys, a.stats) : null;
+      if (!line || (!line.min && !line.pts && !line.reb && !line.ast)) { (dnp[team.id] ||= []).push(a.athlete.id); continue; }
       lines.push({ id: a.athlete.id, n: a.athlete.shortName || a.athlete.displayName, t: team.id, ...line });
     }
   }
-  return { id, d: day, at: summary.header?.competitions?.[0]?.date || '', teams, lines };
+  return { id, d: day, at: summary.header?.competitions?.[0]?.date || '', teams, lines, dnp };
 }
 
 // NBA efficiency for one game line.
@@ -137,6 +140,7 @@ function build(games) {
   const records = {};
   const flags = {};
   const results = {}; // team id -> [[game id, date, 'W' | 'L'], …] in game order
+  const logs = {}; // player id -> [[game id, date, team, opp abbr, '@' | 'vs', 'W' | 'L' | '', pts, opp pts, LOG_KEYS values | null], …]
   let firstDate = null;
   const ordered = [...games.values()].sort((a, b) =>
     a.d.localeCompare(b.d) || a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
@@ -184,10 +188,19 @@ function build(games) {
       }
     }
 
+    for (const t of g.teams) {
+      const opp = g.teams.find(o => o.id !== t.id);
+      const head = [g.id, g.d, t.id, opp?.abbr || '', t.ha === 'away' ? '@' : 'vs', t.w ? 'W' : t.l ? 'L' : '', t.pts, t.opp];
+      for (const l of g.lines) if (l.t === t.id) (logs[l.id] ||= []).push([...head, LOG_KEYS.map(k => l[k])]);
+      for (const id of g.dnp?.[t.id] || []) (logs[id] ||= []).push([...head, null]);
+    }
+
     addRecords(records, g);
     firstDate ||= g.d;
   }
-  return { stats, highs, records, flags, results };
+  // Only players who have played; DNP-only entries are someone on the roster who hasn't.
+  for (const [id, log] of Object.entries(logs)) if (!log.some(r => r[8])) delete logs[id];
+  return { stats, highs, records, flags, results, logs };
 }
 
 // Game date (US Eastern, like ESPN's scoreboard days) from a summary.
@@ -219,6 +232,13 @@ async function loadSet(key) {
     set.changed = true;
     console.log(`Saved ${state.processed.length} existing game(s) for ${key}.`);
   }
+  // Games saved before DNPs and home/away were kept: fetch those once more.
+  const stale = [...games.values()].filter(g => !g.dnp);
+  for (const g of stale) {
+    const summary = await getJSON(`${API}/summary?event=${g.id}`);
+    await saveGame(set, parseGame(summary, g.id, g.d));
+  }
+  if (stale.length) { set.changed = true; console.log(`Refreshed ${stale.length} saved game(s) for ${key}.`); }
   return set;
 }
 
@@ -277,12 +297,13 @@ async function main() {
 
   for (const set of Object.values(sets)) {
     if (!set.changed) continue;
-    const { stats, highs, records, flags, results } = build(set.games);
+    const { stats, highs, records, flags, results, logs } = build(set.games);
     const updated = new Date().toISOString();
     await writeJSON(join(set.dir, 'stats.json'), { ...stats, updated });
     await writeJSON(join(set.dir, 'highs.json'), { ...highs, keys: HIGH_KEYS, updated });
     await writeJSON(join(set.dir, 'records.json'), { ...records, keys: HIGH_KEYS, updated });
     await writeJSON(join(set.dir, 'results.json'), { teams: results, updated });
+    for (const [id, games] of Object.entries(logs)) await writeJSON(join(set.dir, 'players', `${id}.json`), { keys: LOG_KEYS, games });
     for (const [id, f] of Object.entries(flags)) await writeJSON(join(set.dir, 'flags', `${id}.json`), f);
   }
   // Leave index.json alone when nothing changed, so quiet runs don't commit.
