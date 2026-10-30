@@ -855,6 +855,22 @@ const shareOfBest = (rows, k, ymax) => {
 };
 const pct0 = f => `${Math.round(f * 100)}%`;
 
+// The radar compares averages with the league leader's average in each stat
+// (qualified players, as on the Leaders tab): { k: { v, n } }.
+function leaderAvgs(stats) {
+  const teamGames = teamGamesOf(stats);
+  const all = [...combinePlayers(stats).values()];
+  return Object.fromEntries(LOG_SERIES.map(([k]) => {
+    const cat = LEADERS.find(c => c.id === k);
+    let top = null;
+    for (const p of all) if (qualifies(p, cat, teamGames) && (!top || cat.val(p) > cat.val(top))) top = p;
+    return [k, top ? { v: cat.val(top), n: top.n } : null];
+  }));
+}
+const leaderShares = (p, leaders) => LOG_SERIES.map(([k]) => (leaders[k]?.v ? p[k] / p.gp / leaders[k].v : 0));
+const radarNote = leaders => `Average per game ÷ the league leader's average (${
+  LOG_SERIES.map(([k, name]) => `${name} ${leaders[k] ? `${leaders[k].v.toFixed(1)}, ${esc(leaders[k].n)}` : '–'}`).join(' · ')}).`;
+
 // Pentagon geometry: 0 at the center to 1 (the season best) at the rim.
 function radarFrame(width) {
   const size = Math.min(width, 280), R = size / 2 - 46, cx = width / 2, cy = size / 2;
@@ -863,7 +879,8 @@ function radarFrame(width) {
     const a = -Math.PI / 2 + i * 2 * Math.PI / n;
     return [cx + Math.cos(a) * R * f, cy + Math.sin(a) * R * f];
   };
-  const poly = fs => LOG_SERIES.map((_, i) => pt(i, typeof fs === 'number' ? fs : fs[i]).map(v => v.toFixed(1)).join(',')).join(' ');
+  // Shapes stop at the rim; a non-qualifier can average more than the leader.
+  const poly = fs => LOG_SERIES.map((_, i) => pt(i, Math.min(1, typeof fs === 'number' ? fs : fs[i])).map(v => v.toFixed(1)).join(',')).join(' ');
   const grid = [0.25, 0.5, 0.75, 1].map(f => `<polygon class="ring${f === 1 ? ' rim' : ''}" points="${poly(f)}"/>`).join('')
     + LOG_SERIES.map((_, i) => { const [x, y] = pt(i, 1); return `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`; }).join('');
   const label = (i, html) => {
@@ -874,15 +891,16 @@ function radarFrame(width) {
   return { size, cx, pt, poly, grid, label };
 }
 
-// Player page: the player's five shares, each axis keyed to its chart's color.
+// Player page: the player's five shares of the leaders' averages, each axis
+// keyed to its chart's color.
 function shareRadar(shares, width) {
   const { size, pt, poly, grid, label } = radarFrame(width);
   const shape = poly(shares);
-  const dots = LOG_SERIES.map((_, i) => { const [x, y] = pt(i, shares[i]); return `<circle class="dot s${i + 1}" cx="${x}" cy="${y}" r="4"/>`; }).join('');
+  const dots = LOG_SERIES.map((_, i) => { const [x, y] = pt(i, Math.min(1, shares[i])); return `<circle class="dot s${i + 1}" cx="${x}" cy="${y}" r="4"/>`; }).join('');
   const labels = LOG_SERIES.map(([, name], i) =>
     label(i, `<tspan class="rk s${i + 1}">●</tspan> ${name} <tspan class="rv">${pct0(shares[i])}</tspan>`)).join('');
   return `
-    <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the season best per stat: ${
+    <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the league leader's average per stat: ${
       LOG_SERIES.map(([, label], i) => `${label} ${pct0(shares[i])}`).join(', ')}">
       ${grid}<polygon class="shape" points="${shape}"/>${dots}${labels}
     </svg>`;
@@ -939,10 +957,6 @@ function logCharts(rows, fullWidth, best) {
       </div>`;
   }).join('');
   return `
-    <h2>Share of season best</h2>
-    ${shareRadar(shares, fullWidth)}
-    <p class="note radarnote">Average per game played ÷ the season's best single game by anyone (${
-      LOG_SERIES.map(([, label], i) => `${label} ${ymaxes[i]}`).join(', ')}). 100% = matching the best every game.</p>
     <h2>By game</h2>
     <div class="logcharts" data-ymax="${ymaxes.join(',')}">
     <div class="lcgame">Tap or drag a chart to see a game</div>${charts}</div>`;
@@ -1043,6 +1057,7 @@ async function showPlayer(id, setKey) {
     ? await Promise.all([local(`data/${set.key}/players/${id}.json`), local(`data/${set.key}/highs.json`)])
     : [];
   const rows = logRows(logFile);
+  const leaders = stats ? leaderAvgs(stats) : {};
   if (location.hash !== here) return;
 
   let table = `<p class="msg">No ${esc(set?.label?.toLowerCase() || 'season')} games played yet.</p>`;
@@ -1086,6 +1101,8 @@ async function showPlayer(id, setKey) {
     <div class="teamhead">${head(null)}</div>
     ${set ? setChips(sets, set) : ''}
     ${table}
+    ${p ? `<h2>Compared to the league leaders</h2>${shareRadar(leaderShares(p, leaders), Math.min(app.clientWidth || window.innerWidth, 760) - 12)}
+      <p class="note radarnote">${radarNote(leaders)}</p>` : ''}
     ${rows.length ? `${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
   bindLogCharts(rows);
@@ -1169,10 +1186,8 @@ async function showTeam(id) {
   loading();
   const [{ sets, set }, standings] = await Promise.all([pickSet(), loadStandings().catch(() => null)]);
   const entry = standings?.children.flatMap(c => c.standings.entries).find(e => e.team.id === id);
-  const [stats, highs] = set
-    ? await Promise.all([local(`data/${set.key}/stats.json`), local(`data/${set.key}/highs.json`)])
-    : [];
-  const best = Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v]));
+  const stats = set ? await local(`data/${set.key}/stats.json`) : null;
+  const leaders = stats ? leaderAvgs(stats) : {};
   const t = entry?.team || {};
   const info = stats?.teams[id] || {};
   const name = t.displayName || info.name || 'Team';
@@ -1200,7 +1215,7 @@ async function showTeam(id) {
       <tbody>${rows}</tbody>
     </table>
     <p class="note">${esc(set.label)} · per game · tap a column to sort · updated ${ago(stats.updated)}</p>
-    ${teamRadar(players, best, Math.min(app.clientWidth || window.innerWidth, 760) - 12)}`
+    ${teamRadar(players, leaders, Math.min(app.clientWidth || window.innerWidth, 760) - 12)}`
     : `<p class="msg">No ${esc(set?.label?.toLowerCase() || 'season')} games played yet.</p>`}`);
   app.querySelectorAll('[data-sort]').forEach(th =>
     th.onclick = () => { teamSort = +th.dataset.sort; showTeam(id); });
@@ -1215,22 +1230,21 @@ async function showTeam(id) {
 // that needs the tap-to-highlight, which also shows the player's numbers.
 const TEAM_RADAR_MAX = 8;
 
-function teamRadar(players, best, width) {
+function teamRadar(players, leaders, width) {
   const top = players.filter(p => p.gp).sort((a, b) => b.min / b.gp - a.min / a.gp).slice(0, TEAM_RADAR_MAX);
   if (top.length < 2 || width < 200) return '';
   const { size, poly, grid, label } = radarFrame(width);
-  const shares = top.map(p => LOG_SERIES.map(([k]) => Math.min(1, p[k] / p.gp / Math.max(1, best[k] || 0))));
+  const shares = top.map(p => leaderShares(p, leaders));
   const shapes = top.map((p, i) => `<polygon class="tshape c${i + 1}" data-i="${i}" points="${poly(shares[i])}"/>`).join('');
   const labels = LOG_SERIES.map(([, name], i) => label(i, `${name} <tspan class="rv" data-axis="${i}"></tspan>`)).join('');
   return `
-    <h2>Share of season best</h2>
-    <svg class="radar team" width="${width}" height="${size}" data-shares="${esc(JSON.stringify(shares))}" role="img" aria-label="Share of the season best per stat for the team's top players">
+    <h2>Compared to the league leaders</h2>
+    <svg class="radar team" width="${width}" height="${size}" data-shares="${esc(JSON.stringify(shares))}" role="img" aria-label="Share of the league leader's average per stat for the team's top players">
       ${grid}${shapes}${labels}
     </svg>
     <div class="chips radarkey">${top.map((p, i) =>
       `<button data-hi="${i}"><i class="c${i + 1}"></i>${esc(p.n)}</button>`).join('')}</div>
-    <p class="note radarnote">Average per game played ÷ the season's best single game by anyone (${
-      LOG_SERIES.map(([k, name]) => `${name} ${best[k] || '–'}`).join(', ')}). Top ${top.length} by minutes · tap a player to highlight.</p>`;
+    <p class="note radarnote">${radarNote(leaders)} Top ${top.length} by minutes · tap a player to highlight.</p>`;
 }
 
 // Tap a player to bring their shape forward and label the corners with their
