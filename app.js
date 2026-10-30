@@ -826,7 +826,8 @@ const PLAYER_ROWS = [
 // fills in the header when it arrives.
 // ---------- player game log ----------
 
-// One small chart per stat, each scaled 0 to that stat's season best by anyone.
+// One small chart per stat, each scaled 0 to that stat's season best by
+// anyone, in the validated categorical colors (style.css --s1…--s5).
 const LOG_SERIES = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['blk', 'BLK'], ['stl', 'STL']];
 
 // Game log rows from data/<set>/players/<id>.json, oldest first. Missed games
@@ -842,11 +843,48 @@ function logRows(file) {
 const LOG_H = 84;
 const LOG_PAD = { l: 26, r: 8, t: 6, b: 6 };
 const LOG_AXIS = 16; // game numbers under the last chart
+const SHARE_W = 46; // the share-of-best figure right of each chart
+
+// Share of the season best: the area under a stat's line over the games
+// played, as a fraction of the area if every one of those games matched the
+// season best. Counting each game as one value, that's simply the average
+// per game played divided by the season best.
+const shareOfBest = (rows, k, ymax) => {
+  const played = rows.filter(g => !g.dnp);
+  return played.length ? played.reduce((a, g) => a + g[k], 0) / played.length / ymax : 0;
+};
+const pct0 = f => `${Math.round(f * 100)}%`;
+
+// Pentagon of the five shares, 0 at the center to 1 (the season best) at the rim.
+function shareRadar(shares, width) {
+  const size = Math.min(width, 280), R = size / 2 - 46, cx = width / 2, cy = size / 2;
+  const n = LOG_SERIES.length;
+  const pt = (i, f) => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+    return [cx + Math.cos(a) * R * f, cy + Math.sin(a) * R * f];
+  };
+  const poly = f => LOG_SERIES.map((_, i) => pt(i, f).map(v => v.toFixed(1)).join(',')).join(' ');
+  const rings = [0.25, 0.5, 0.75, 1].map(f => `<polygon class="ring${f === 1 ? ' rim' : ''}" points="${poly(f)}"/>`).join('');
+  const spokes = LOG_SERIES.map((_, i) => { const [x, y] = pt(i, 1); return `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`; }).join('');
+  const shape = LOG_SERIES.map((_, i) => pt(i, shares[i]).map(v => v.toFixed(1)).join(',')).join(' ');
+  const dots = LOG_SERIES.map((_, i) => { const [x, y] = pt(i, shares[i]); return `<circle class="dot s${i + 1}" cx="${x}" cy="${y}" r="4"/>`; }).join('');
+  const labels = LOG_SERIES.map(([, label], i) => {
+    const [x, y] = pt(i, 1.2);
+    const anchor = Math.abs(x - cx) < 2 ? 'middle' : x > cx ? 'start' : 'end';
+    return `<text class="rl" x="${x}" y="${y + 4}" text-anchor="${anchor}"><tspan class="rk s${i + 1}">●</tspan> ${label} <tspan class="rv">${pct0(shares[i])}</tspan></text>`;
+  }).join('');
+  return `
+    <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the season best per stat: ${
+      LOG_SERIES.map(([, label], i) => `${label} ${pct0(shares[i])}`).join(', ')}">
+      ${rings}${spokes}<polygon class="shape" points="${shape}"/>${dots}${labels}
+    </svg>`;
+}
 
 // `best` maps stat -> the league's best single game this season, so a stat's
 // chart is on the same scale for every player.
-function logCharts(rows, width, best) {
-  if (!rows.length || width < 200) return '';
+function logCharts(rows, fullWidth, best) {
+  if (!rows.length || fullWidth < 200) return '';
+  const width = fullWidth - SHARE_W;
   const N = rows.length;
   const { l, r, t: top, b } = LOG_PAD;
   const pw = width - l - r, ph = LOG_H - top - b;
@@ -854,6 +892,7 @@ function logCharts(rows, width, best) {
   const slot = N > 1 ? pw / (N - 1) : pw;
   const every = Math.ceil(N / 8);
   const ymaxes = LOG_SERIES.map(([k]) => Math.max(1, best?.[k] || 0, ...rows.map(g => g[k])));
+  const shares = LOG_SERIES.map(([k], i) => shareOfBest(rows, k, ymaxes[i]));
 
   const charts = LOG_SERIES.map(([k, label], si) => {
     const ymax = ymaxes[si];
@@ -879,16 +918,25 @@ function logCharts(rows, width, best) {
       if (N <= 12 || (!prevPlayed && !nextPlayed)) dots += `<circle class="dot" cx="${x(g.n)}" cy="${y(g[k])}" r="4"/>`;
     });
     return `
-      <div class="lc" data-k="${k}">
+      <div class="lc s${si + 1}" data-k="${k}">
         <div class="lchead"><span>${label}</span><b class="val"></b></div>
+        <div class="lcbody">
         <svg width="${width}" height="${h}" role="img" aria-label="${label} by game">
           ${bands}${grid}${xs}<path class="ln" d="${d}"/>${dots}
           <line class="xh" x1="0" x2="0" y1="${top}" y2="${LOG_H - b}" visibility="hidden"/>
           <circle class="hdot" r="5" visibility="hidden"/>
         </svg>
+        <div class="share" title="Average per game played ÷ season best">${pct0(shares[si])}</div>
+        </div>
       </div>`;
   }).join('');
-  return `<div class="logcharts" data-ymax="${ymaxes.join(',')}">
+  return `
+    <h2>Share of season best</h2>
+    ${shareRadar(shares, fullWidth)}
+    <p class="note radarnote">Average per game played ÷ the season's best single game by anyone (${
+      LOG_SERIES.map(([, label], i) => `${label} ${ymaxes[i]}`).join(', ')}). 100% = matching the best every game.</p>
+    <h2>By game</h2>
+    <div class="logcharts" data-ymax="${ymaxes.join(',')}">
     <div class="lcgame">Tap or drag a chart to see a game</div>${charts}</div>`;
 }
 
@@ -1030,7 +1078,7 @@ async function showPlayer(id, setKey) {
     <div class="teamhead">${head(null)}</div>
     ${set ? setChips(sets, set) : ''}
     ${table}
-    ${rows.length ? `<h2>By game</h2>${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
+    ${rows.length ? `${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
   bindLogCharts(rows);
   bindRows('game', g => '#/g/' + g);

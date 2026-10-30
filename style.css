@@ -11,7 +11,8 @@
   --lhi: #2f6fe0;
   --away: #3987e5;
   --home: #e66767;
-  --s1: #3987e5; /* chart series (dark step) */
+  /* Categorical chart series, validated order (dark steps). */
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -27,7 +28,7 @@
     --lhi: #2563eb;
     --away: #2a78d6;
     --home: #e34948;
-    --s1: #2a78d6;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
   }
 }
 
@@ -151,8 +152,23 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
 .logcharts .zero { stroke: var(--muted); stroke-width: 1; }
 .logcharts .tk { fill: var(--muted); font-variant-numeric: tabular-nums; }
 .logcharts .dnpband { fill: var(--line); opacity: .6; }
-.logcharts .ln { fill: none; stroke: var(--s1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.logcharts .dot, .logcharts .hdot { fill: var(--s1); stroke: var(--bg); stroke-width: 2; }
+.logcharts .ln { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.logcharts .dot, .logcharts .hdot { fill: var(--c); stroke: var(--bg); stroke-width: 2; }
+.logcharts .lcbody { display: flex; align-items: center; }
+.logcharts .share { width: 46px; text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; padding-right: 2px; }
+.lc.s1, .radar .s1 { --c: var(--s1); } .lc.s2, .radar .s2 { --c: var(--s2); } .lc.s3, .radar .s3 { --c: var(--s3); }
+.lc.s4, .radar .s4 { --c: var(--s4); } .lc.s5, .radar .s5 { --c: var(--s5); }
+/* Radar: one series, so a single wash + line; each axis keyed to its chart's color. */
+.radar { display: block; margin: 0 auto; font: 12px system-ui, -apple-system, sans-serif; }
+.radar .ring { fill: none; stroke: var(--line); stroke-width: 1; }
+.radar .ring.rim { stroke: var(--muted); }
+.radar .spoke { stroke: var(--line); stroke-width: 1; }
+.radar .shape { fill: var(--s1); fill-opacity: .12; stroke: var(--s1); stroke-width: 2; stroke-linejoin: round; }
+.radar .dot { fill: var(--c); stroke: var(--bg); stroke-width: 2; }
+.radar .rl { fill: var(--muted); font-weight: 600; }
+.radar .rl .rk { fill: var(--c); font-size: 10px; }
+.radar .rl .rv { fill: var(--text); }
+.note.radarnote { margin: 0 8px 4px; }
 .logcharts .xh { stroke: var(--text); stroke-width: 1; opacity: .5; }
 .box.gamelog td:first-child { line-height: 1.2; }
 .box.gamelog .opp { display: block; font-weight: 600; }
