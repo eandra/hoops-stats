@@ -492,7 +492,7 @@ function renderGame() {
       <div class="mid">${esc(status.shortDetail)}${tag ? `<div class="tag">${tag}</div>` : ''}</div>
       ${teamHead(home)}
     </div>
-    ${flowChart(data, away, home, Math.min(app.clientWidth, 760) - 12)}
+    ${flowChart(data, away, home, Math.min(app.clientWidth || window.innerWidth, 760) - 12)}
     ${lineScore(away, home, data.boxscore.teams?.[0]?.statistics?.find(s => s.name === 'leadChanges')?.displayValue)}
     ${players.length ? `<div class="teamtabs">${tabs}</div>${boxTable(players[side], flags)}
       <p class="legend"><span class="dot hi"></span>Player's season high · <span class="dot lhi"></span>League season high</p>`
@@ -826,7 +826,7 @@ const PLAYER_ROWS = [
 // fills in the header when it arrives.
 // ---------- player game log ----------
 
-// Chart series, in the validated categorical order (see style.css --s1…--s5).
+// One small chart per stat, each scaled 0 to that stat's season best by anyone.
 const LOG_SERIES = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['blk', 'BLK'], ['stl', 'STL']];
 
 // Game log rows from data/<set>/players/<id>.json, oldest first. Missed games
@@ -839,42 +839,37 @@ function logRows(file) {
   });
 }
 
-const LOG_H = 260;
-const LOG_PAD = { l: 26, r: 8, t: 8, b: 20 };
+const LOG_H = 84;
+const LOG_PAD = { l: 26, r: 8, t: 6, b: 6 };
+const LOG_AXIS = 16; // game numbers under the last chart
 
-// The y-axis runs to the season's best single-game score by anyone (`best`),
-// so every player's chart is on the same scale.
-function logChart(rows, width, best) {
+// `best` maps stat -> the league's best single game this season, so a stat's
+// chart is on the same scale for every player.
+function logCharts(rows, width, best) {
   if (!rows.length || width < 200) return '';
   const N = rows.length;
   const { l, r, t: top, b } = LOG_PAD;
   const pw = width - l - r, ph = LOG_H - top - b;
-  const ymax = Math.max(4, best || 0, ...rows.flatMap(g => LOG_SERIES.map(([k]) => g[k])));
-  const step = [2, 5, 10, 20].find(st => ymax / st <= 6) || 25;
   const x = n => (N === 1 ? l + pw / 2 : l + (n - 1) / (N - 1) * pw);
-  const y = v => top + (1 - v / ymax) * ph;
-
-  const grid = [];
-  // Clean ticks, with the season best itself labeled at the top (replacing a
-  // tick that's too close to it).
-  const ticks = [];
-  for (let v = 0; v <= ymax; v += step) ticks.push(v);
-  if (ymax - ticks[ticks.length - 1] < step * 0.4) ticks.pop();
-  ticks.push(ymax);
-  for (const v of ticks) {
-    grid.push(`<line class="${v ? 'g' : 'zero'}" x1="${l}" x2="${width - r}" y1="${y(v)}" y2="${y(v)}"/>`,
-      `<text class="tk" x="${l - 5}" y="${y(v) + 3.5}" text-anchor="end">${v}</text>`);
-  }
-  const every = Math.ceil(N / 8);
-  for (const g of rows) {
-    if ((g.n - 1) % every === 0 || g.n === N) grid.push(`<text class="tk" x="${x(g.n)}" y="${LOG_H - 5}" text-anchor="middle">${g.n}</text>`);
-  }
-  // Missed games: a faint band, and the lines break there.
   const slot = N > 1 ? pw / (N - 1) : pw;
-  const bands = rows.filter(g => g.dnp).map(g =>
-    `<rect class="dnpband" x="${x(g.n) - slot / 2}" y="${top}" width="${slot}" height="${ph}"/>`).join('');
+  const every = Math.ceil(N / 8);
+  const ymaxes = LOG_SERIES.map(([k]) => Math.max(1, best?.[k] || 0, ...rows.map(g => g[k])));
 
-  const series = LOG_SERIES.map(([k], si) => {
+  const charts = LOG_SERIES.map(([k, label], si) => {
+    const ymax = ymaxes[si];
+    const y = v => top + (1 - v / ymax) * ph;
+    const last = si === LOG_SERIES.length - 1;
+    const h = LOG_H + (last ? LOG_AXIS : 0);
+    // 0, the season best, and a rounded midpoint when there's room.
+    const ticks = [0, ymax];
+    if (ymax >= 6) ticks.push(Math.round(ymax / 2));
+    const grid = ticks.map(v => `<line class="${v ? 'g' : 'zero'}" x1="${l}" x2="${width - r}" y1="${y(v)}" y2="${y(v)}"/>
+      <text class="tk" x="${l - 5}" y="${y(v) + 3.5}" text-anchor="end">${v}</text>`).join('');
+    const xs = last ? rows.filter(g => (g.n - 1) % every === 0 || g.n === N)
+      .map(g => `<text class="tk" x="${x(g.n)}" y="${h - 3}" text-anchor="middle">${g.n}</text>`).join('') : '';
+    // Missed games: a faint band, and the line breaks there.
+    const bands = rows.filter(g => g.dnp).map(g =>
+      `<rect class="dnpband" x="${x(g.n) - slot / 2}" y="${top}" width="${slot}" height="${ph}"/>`).join('');
     let d = '', dots = '';
     rows.forEach((g, i) => {
       if (g.dnp) return;
@@ -883,56 +878,61 @@ function logChart(rows, width, best) {
       // Dots where a line alone can't show the game: short logs, or a game between misses.
       if (N <= 12 || (!prevPlayed && !nextPlayed)) dots += `<circle class="dot" cx="${x(g.n)}" cy="${y(g[k])}" r="4"/>`;
     });
-    return `<g class="s${si + 1}"><path class="ln" d="${d}"/>${dots}</g>`;
+    return `
+      <div class="lc" data-k="${k}">
+        <div class="lchead"><span>${label}</span><b class="val"></b></div>
+        <svg width="${width}" height="${h}" role="img" aria-label="${label} by game">
+          ${bands}${grid}${xs}<path class="ln" d="${d}"/>${dots}
+          <line class="xh" x1="0" x2="0" y1="${top}" y2="${LOG_H - b}" visibility="hidden"/>
+          <circle class="hdot" r="5" visibility="hidden"/>
+        </svg>
+      </div>`;
   }).join('');
-
-  return `
-    <div class="legend chartkey">${LOG_SERIES.map(([, label], si) => `<span><i class="s${si + 1}"></i>${label}</span>`).join('')}</div>
-    <div class="logchart" data-n="${N}">
-      <svg width="${width}" height="${LOG_H}" role="img" aria-label="Points, rebounds, assists, blocks and steals by game">
-        ${bands}${grid.join('')}${series}
-        <line class="xh" x1="0" x2="0" y1="${top}" y2="${LOG_H - b}" visibility="hidden"/>
-      </svg>
-      <div class="tip" hidden></div>
-    </div>`;
+  return `<div class="logcharts" data-ymax="${ymaxes.join(',')}">
+    <div class="lcgame">Tap or drag a chart to see a game</div>${charts}</div>`;
 }
 
-// Crosshair + readout for the game log chart: snaps to the nearest game.
-function bindLogChart(rows) {
-  const box = app.querySelector('.logchart');
+// One crosshair across all five charts: snaps to the nearest game, shows each
+// stat's value in its chart's title row and the game above the charts.
+function bindLogCharts(rows) {
+  const box = app.querySelector('.logcharts');
   if (!box) return;
-  const svg = box.querySelector('svg'), xh = box.querySelector('.xh'), tip = box.querySelector('.tip');
-  const N = rows.length, pw = svg.width.baseVal.value - LOG_PAD.l - LOG_PAD.r;
-  const hide = () => { xh.setAttribute('visibility', 'hidden'); tip.hidden = true; };
-  svg.addEventListener('pointermove', e => {
-    const px = e.clientX - svg.getBoundingClientRect().left - LOG_PAD.l;
-    const g = rows[N === 1 ? 0 : Math.max(0, Math.min(N - 1, Math.round(px / pw * (N - 1))))];
+  const N = rows.length;
+  const ymax = box.dataset.ymax.split(',').map(Number);
+  const charts = [...box.querySelectorAll('.lc')];
+  const pw = charts[0].querySelector('svg').width.baseVal.value - LOG_PAD.l - LOG_PAD.r;
+  const ph = LOG_H - LOG_PAD.t - LOG_PAD.b;
+  const label = box.querySelector('.lcgame');
+  const show = g => {
     const cx = N === 1 ? LOG_PAD.l + pw / 2 : LOG_PAD.l + (g.n - 1) / (N - 1) * pw;
-    xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('visibility', 'visible');
-    tip.replaceChildren();
-    const head = document.createElement('div');
-    head.className = 'th';
-    head.textContent = `Game ${g.n} · ${shortDate(g.d)} ${g.ha} ${g.opp}`;
-    tip.append(head);
-    if (g.dnp) {
-      const row = document.createElement('div');
-      row.textContent = 'Did not play';
-      tip.append(row);
-    } else {
-      LOG_SERIES.forEach(([k, label], si) => {
-        const row = document.createElement('div');
-        const key = document.createElement('i'); key.className = `s${si + 1}`;
-        const v = document.createElement('b'); v.textContent = g[k];
-        row.append(key, v, ` ${label}`);
-        tip.append(row);
-      });
-    }
-    tip.hidden = false;
-    const w = tip.offsetWidth;
-    tip.style.left = `${Math.max(0, Math.min(box.clientWidth - w, cx - w / 2))}px`;
-  });
-  svg.addEventListener('pointerleave', hide);
-  svg.addEventListener('pointercancel', hide);
+    label.textContent = `Game ${g.n} · ${shortDate(g.d)} ${g.ha} ${g.opp}${g.dnp ? ' · did not play' : ''}`;
+    charts.forEach((c, i) => {
+      const k = c.dataset.k;
+      const xh = c.querySelector('.xh'), dot = c.querySelector('.hdot');
+      xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('visibility', 'visible');
+      c.querySelector('.val').textContent = g.dnp ? '–' : g[k];
+      dot.setAttribute('visibility', g.dnp ? 'hidden' : 'visible');
+      dot.setAttribute('cx', cx);
+      dot.setAttribute('cy', LOG_PAD.t + (1 - g[k] / ymax[i]) * ph);
+    });
+  };
+  const hide = () => {
+    label.textContent = 'Tap or drag a chart to see a game';
+    charts.forEach(c => {
+      c.querySelector('.xh').setAttribute('visibility', 'hidden');
+      c.querySelector('.hdot').setAttribute('visibility', 'hidden');
+      c.querySelector('.val').textContent = '';
+    });
+  };
+  for (const c of charts) {
+    const svg = c.querySelector('svg');
+    svg.addEventListener('pointermove', e => {
+      const px = e.clientX - svg.getBoundingClientRect().left - LOG_PAD.l;
+      show(rows[N === 1 ? 0 : Math.max(0, Math.min(N - 1, Math.round(px / pw * (N - 1))))]);
+    });
+    svg.addEventListener('pointerleave', hide);
+    svg.addEventListener('pointercancel', hide);
+  }
 }
 
 // Game log table, most recent first. Rows open the box score.
@@ -1030,9 +1030,9 @@ async function showPlayer(id, setKey) {
     <div class="teamhead">${head(null)}</div>
     ${set ? setChips(sets, set) : ''}
     ${table}
-    ${rows.length ? `<h2>By game</h2>${logChart(rows, Math.min(app.clientWidth, 760) - 12, highs?.league?.pts?.v)}${logTable(rows)}` : ''}`);
+    ${rows.length ? `<h2>By game</h2>${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
-  bindLogChart(rows);
+  bindLogCharts(rows);
   bindRows('game', g => '#/g/' + g);
   const ath = await loadAthlete(id);
   const el = app.querySelector('.teamhead');
