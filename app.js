@@ -839,22 +839,29 @@ function logRows(file) {
   });
 }
 
-const LOG_H = 170;
+const LOG_H = 260;
 const LOG_PAD = { l: 26, r: 8, t: 8, b: 20 };
 
-function logChart(rows, width) {
+// The y-axis runs to the season's best single-game score by anyone (`best`),
+// so every player's chart is on the same scale.
+function logChart(rows, width, best) {
   if (!rows.length || width < 200) return '';
   const N = rows.length;
   const { l, r, t: top, b } = LOG_PAD;
   const pw = width - l - r, ph = LOG_H - top - b;
-  const max = Math.max(4, ...rows.flatMap(g => LOG_SERIES.map(([k]) => g[k])));
-  const step = [2, 5, 10, 20].find(st => max / st <= 4) || 25;
-  const ymax = Math.ceil(max / step) * step;
+  const ymax = Math.max(4, best || 0, ...rows.flatMap(g => LOG_SERIES.map(([k]) => g[k])));
+  const step = [2, 5, 10, 20].find(st => ymax / st <= 6) || 25;
   const x = n => (N === 1 ? l + pw / 2 : l + (n - 1) / (N - 1) * pw);
   const y = v => top + (1 - v / ymax) * ph;
 
   const grid = [];
-  for (let v = 0; v <= ymax; v += step) {
+  // Clean ticks, with the season best itself labeled at the top (replacing a
+  // tick that's too close to it).
+  const ticks = [];
+  for (let v = 0; v <= ymax; v += step) ticks.push(v);
+  if (ymax - ticks[ticks.length - 1] < step * 0.4) ticks.pop();
+  ticks.push(ymax);
+  for (const v of ticks) {
     grid.push(`<line class="${v ? 'g' : 'zero'}" x1="${l}" x2="${width - r}" y1="${y(v)}" y2="${y(v)}"/>`,
       `<text class="tk" x="${l - 5}" y="${y(v) + 3.5}" text-anchor="end">${v}</text>`);
   }
@@ -976,7 +983,10 @@ async function showPlayer(id, setKey) {
   const players = stats ? combinePlayers(stats) : new Map();
   const p = players.get(id);
   const team = p ? stats.teams[p.t] : null;
-  const rows = p ? logRows(await local(`data/${set.key}/players/${id}.json`)) : [];
+  const [logFile, highs] = p
+    ? await Promise.all([local(`data/${set.key}/players/${id}.json`), local(`data/${set.key}/highs.json`)])
+    : [];
+  const rows = logRows(logFile);
   if (location.hash !== here) return;
 
   let table = `<p class="msg">No ${esc(set?.label?.toLowerCase() || 'season')} games played yet.</p>`;
@@ -1020,7 +1030,7 @@ async function showPlayer(id, setKey) {
     <div class="teamhead">${head(null)}</div>
     ${set ? setChips(sets, set) : ''}
     ${table}
-    ${rows.length ? `<h2>By game</h2>${logChart(rows, Math.min(app.clientWidth, 760) - 12)}${logTable(rows)}` : ''}`);
+    ${rows.length ? `<h2>By game</h2>${logChart(rows, Math.min(app.clientWidth, 760) - 12, highs?.league?.pts?.v)}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
   bindLogChart(rows);
   bindRows('game', g => '#/g/' + g);
