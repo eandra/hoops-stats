@@ -831,6 +831,8 @@ const PLAYER_ROWS = [
 // One small chart per stat, each scaled 0 to that stat's season best by
 // anyone, in the validated categorical colors (style.css --s1…--s5).
 const LOG_SERIES = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['blk', 'BLK'], ['stl', 'STL']];
+// Game log charts: y-axis tick step per stat; the axis runs to the next 10.
+const LOG_STEP = { pts: 10, reb: 5, ast: 5, blk: 2, stl: 2 };
 
 // Game log rows from data/<set>/players/<id>.json, oldest first. Missed games
 // keep their place (game number) with every stat 0 and dnp set.
@@ -842,7 +844,7 @@ function logRows(file) {
   });
 }
 
-const LOG_H = 84;
+const LOG_H = 100;
 const LOG_PAD = { l: 26, r: 8, t: 6, b: 6 };
 const LOG_AXIS = 16; // game numbers under the last chart
 const SHARE_W = 46; // the share-of-best figure right of each chart
@@ -930,17 +932,18 @@ function logCharts(rows, fullWidth, best) {
   const x = n => (N === 1 ? l + pw / 2 : l + (n - 1) / (N - 1) * pw);
   const slot = N > 1 ? pw / (N - 1) : pw;
   const every = Math.ceil(N / 8);
-  const ymaxes = LOG_SERIES.map(([k]) => Math.max(1, best?.[k] || 0, ...rows.map(g => g[k])));
-  const shares = LOG_SERIES.map(([k], i) => shareOfBest(rows, k, ymaxes[i]));
+  // The share on the right uses the season best itself; the axis rounds it up to the next 10.
+  const bests = LOG_SERIES.map(([k]) => Math.max(1, best?.[k] || 0, ...rows.map(g => g[k])));
+  const shares = LOG_SERIES.map(([k], i) => shareOfBest(rows, k, bests[i]));
+  const ymaxes = bests.map(v => Math.ceil(v / 10) * 10);
 
   const charts = LOG_SERIES.map(([k, label], si) => {
     const ymax = ymaxes[si];
     const y = v => top + (1 - v / ymax) * ph;
     const last = si === LOG_SERIES.length - 1;
     const h = LOG_H + (last ? LOG_AXIS : 0);
-    // 0, the season best, and a rounded midpoint when there's room.
-    const ticks = [0, ymax];
-    if (ymax >= 6) ticks.push(Math.round(ymax / 2));
+    const ticks = [];
+    for (let v = 0; v <= ymax; v += LOG_STEP[k]) ticks.push(v);
     const grid = ticks.map(v => `<line class="${v ? 'g' : 'zero'}" x1="${l}" x2="${width - r}" y1="${y(v)}" y2="${y(v)}"/>
       <text class="tk" x="${l - 5}" y="${y(v) + 3.5}" text-anchor="end">${v}</text>`).join('');
     const xs = last ? rows.filter(g => (g.n - 1) % every === 0 || g.n === N)
