@@ -730,9 +730,11 @@ async function showEfficiency() {
   const col = EFF_COLS[effSort];
   // Best first (lowest for `asc` columns); no value sorts last.
   const key = p => { const v = col.val(p); return Number.isFinite(v) ? (col.asc ? -v : v) : -Infinity; };
+  const leaders = leaderAvgs(stats);
   const players = [...combinePlayers(stats).values()]
-    .filter(p => qualifies(p, LEADERS[0], teamGames))
-    .sort((a, b) => key(b) - key(a));
+    .filter(p => qualifies(p, LEADERS[0], teamGames));
+  for (const p of players) p.all = allScore(leaderShares(p, leaders));
+  players.sort((a, b) => key(b) - key(a));
 
   const rows = players.map(p => `<tr class="link" data-player="${esc(p.id)}">
     <td>${esc(p.n)}</td>
@@ -747,7 +749,7 @@ async function showEfficiency() {
         `<th data-sort="${i}" class="${i === effSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>` : '<p class="msg">No qualified players yet.</p>'}
-    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · ${minGames(teamGames) > 1 ? `players in ${minGames(teamGames)}+ games` : `all players until teams have played ${QUALIFY_FROM} games`} · tap a column to sort · updated ${ago(stats.updated)}</p>`);
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · ALL = all-around: area of the player's radar (PTS, REB, AST, BLK, STL vs the league leaders), 0-100 · ${minGames(teamGames) > 1 ? `players in ${minGames(teamGames)}+ games` : `all players until teams have played ${QUALIFY_FROM} games`} · tap a column to sort · updated ${ago(stats.updated)}</p>`);
   app.querySelectorAll('[data-sort]').forEach(th =>
     th.onclick = () => { effSort = +th.dataset.sort; showEfficiency(); });
   bindRows('player', id => '#/player/' + id);
@@ -868,6 +870,17 @@ function leaderAvgs(stats) {
   }));
 }
 const leaderShares = (p, leaders) => LOG_SERIES.map(([k]) => (leaders[k]?.v ? p[k] / p.gp / leaders[k].v : 0));
+
+// ALL (all-around): the radar shape's area as a share of the full pentagon,
+// 0-100. With corners r1…r5 (capped at the rim), area = ½·sin72°·Σ r_i·r_i+1,
+// so the share is Σ r_i·r_i+1 / 5. Neighbors matter: it rewards stats next
+// to each other on the radar (order fixed: PTS, REB, AST, BLK, STL).
+const allScore = shares => {
+  const r = shares.map(x => Math.min(1, x));
+  return r.reduce((a, v, i) => a + v * r[(i + 1) % r.length], 0) / r.length * 100;
+};
+const allTag = (width, score) => `<text class="alltag" x="${width - 6}" y="16" text-anchor="end">ALL <tspan class="av">${
+  score == null ? '' : score.toFixed(1)}</tspan></text>`;
 const radarNote = leaders => `Average per game ÷ the league leader's average (${
   LOG_SERIES.map(([k, name]) => `${name} ${leaders[k] ? `${leaders[k].v.toFixed(1)}, ${esc(leaders[k].n)}` : '–'}`).join(' · ')}).`;
 
@@ -902,7 +915,7 @@ function shareRadar(shares, width) {
   return `
     <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the league leader's average per stat: ${
       LOG_SERIES.map(([, label], i) => `${label} ${pct0(shares[i])}`).join(', ')}">
-      ${grid}<polygon class="shape" points="${shape}"/>${dots}${labels}
+      ${grid}<polygon class="shape" points="${shape}"/>${dots}${labels}${allTag(width, allScore(shares))}
     </svg>`;
 }
 
@@ -1102,7 +1115,7 @@ async function showPlayer(id, setKey) {
     ${set ? setChips(sets, set) : ''}
     ${table}
     ${p ? `<h2>Compared to the league leaders</h2>${shareRadar(leaderShares(p, leaders), Math.min(app.clientWidth || window.innerWidth, 760) - 12)}
-      <p class="note radarnote">${radarNote(leaders)}</p>` : ''}
+      <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full pentagon.</p>` : ''}
     ${rows.length ? `${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
   bindLogCharts(rows);
@@ -1179,8 +1192,10 @@ let teamSort = 2; // PTS
 
 // Efficiency tab: everyone listed meets the games minimum, so skip GP and MIN to fit a phone.
 const EFF_COLS = [...TEAM_COLS.slice(2), { label: 'EFF', cls: 'e', val: eff },
-  { label: 'SD', cls: 'sd', val: effSd, fmt: v => (Number.isFinite(v) ? v.toFixed(1) : '–'), asc: true }];
-let effSort = EFF_COLS.length - 2; // EFF
+  { label: 'SD', cls: 'sd', val: effSd, fmt: v => (Number.isFinite(v) ? v.toFixed(1) : '–'), asc: true },
+  // `all` is set per player when the tab renders (it needs the league leaders).
+  { label: 'ALL', cls: 'sd', val: p => p.all ?? NaN }];
+let effSort = EFF_COLS.findIndex(c => c.label === 'EFF');
 
 async function showTeam(id) {
   loading();
@@ -1240,11 +1255,11 @@ function teamRadar(players, leaders, width) {
   return `
     <h2>Compared to the league leaders</h2>
     <svg class="radar team" width="${width}" height="${size}" data-shares="${esc(JSON.stringify(shares))}" role="img" aria-label="Share of the league leader's average per stat for the team's top players">
-      ${grid}${shapes}${labels}
+      ${grid}${shapes}${labels}${allTag(width, null)}
     </svg>
     <div class="chips radarkey">${top.map((p, i) =>
-      `<button data-hi="${i}"><i class="c${i + 1}"></i>${esc(p.n)}</button>`).join('')}</div>
-    <p class="note radarnote">${radarNote(leaders)} Top ${top.length} by minutes · tap a player to highlight.</p>`;
+      `<button data-hi="${i}"><i class="c${i + 1}"></i>${esc(p.n)}<span class="all">${allScore(shares[i]).toFixed(1)}</span></button>`).join('')}</div>
+    <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full pentagon. Top ${top.length} by minutes · tap a player to highlight.</p>`;
 }
 
 // Tap a player to bring their shape forward and label the corners with their
@@ -1261,6 +1276,8 @@ function bindTeamRadar() {
       if (+sh.dataset.i === hi) svg.insertBefore(sh, svg.querySelector('.rl'));
     });
     svg.querySelectorAll('[data-axis]').forEach(t => { t.textContent = hi >= 0 ? pct0(shares[hi][+t.dataset.axis]) : ''; });
+    svg.querySelector('.alltag').style.visibility = hi >= 0 ? '' : 'hidden';
+    svg.querySelector('.alltag .av').textContent = hi >= 0 ? allScore(shares[hi]).toFixed(1) : '';
     app.querySelectorAll('[data-hi]').forEach(b => b.classList.toggle('on', +b.dataset.hi === hi));
   };
   app.querySelectorAll('[data-hi]').forEach(b => b.onclick = () => { hi = hi === +b.dataset.hi ? -1 : +b.dataset.hi; draw(); });
