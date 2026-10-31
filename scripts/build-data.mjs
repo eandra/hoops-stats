@@ -35,7 +35,10 @@ const RECORDS_TOP = 20;
 // Bump when the published files gain a field, to rebuild every set once
 // from its saved games.
 const BUILD = 3;
-const RECHECK_DAYS = 3; // today and the two days before
+// Today and the two days before. The morning workflow re-runs every few
+// minutes with RECHECK_DAYS=0 after its first pass (corrections only need
+// checking once a morning).
+const RECHECK_DAYS = process.env.RECHECK_DAYS != null ? +process.env.RECHECK_DAYS : 3;
 const LOG_KEYS = ['min', 'pts', 'reb', 'ast', 'blk', 'stl', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'to', 'pm'];
 const LINE_KEYS = ['min', 'pm', 'pts', 'reb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
 const TEAM_KEYS = ['reb', 'oreb', 'ast', 'stl', 'blk', 'to', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'];
