@@ -166,9 +166,8 @@ main { max-width: 760px; margin: 0 auto; padding: 10px 6px calc(env(safe-area-in
 .radar .ring.rim { stroke: var(--muted); }
 .radar .spoke { stroke: var(--line); stroke-width: 1; }
 .radar .shape { fill: var(--s1); fill-opacity: .12; stroke: var(--s1); stroke-width: 2; stroke-linejoin: round; }
-.radar .dot { fill: var(--c); stroke: var(--bg); stroke-width: 2; }
+.radar .dot { fill: var(--s1); stroke: var(--bg); stroke-width: 2; }
 .radar .rl { fill: var(--muted); font-weight: 600; }
-.radar .rl .rk { fill: var(--c); font-size: 10px; }
 .radar .rl .rv { fill: var(--text); }
 .note.radarnote { margin: 0 8px 4px; }
 /* Team radar: one outline per player; a highlighted player gets the wash and the rest fade. */

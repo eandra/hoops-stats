@@ -749,7 +749,7 @@ async function showEfficiency() {
         `<th data-sort="${i}" class="${i === effSort ? 'on' : ''}">${c.label}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>` : '<p class="msg">No qualified players yet.</p>'}
-    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · ALL = all-around: area of the player's radar (PTS, REB, AST, BLK, STL vs the league leaders), 0-100 · ${minGames(teamGames) > 1 ? `players in ${minGames(teamGames)}+ games` : `all players until teams have played ${QUALIFY_FROM} games`} · tap a column to sort · updated ${ago(stats.updated)}</p>`);
+    <p class="note">${esc(set.label)} · per game · EFF = PTS + REB + AST + STL + BLK − missed FG − missed FT − TO · SD = how much EFF varies game to game (lower = more consistent) · ALL = all-around: area of the player's radar (PTS, AST, 3P%, FG%, REB, BLK, STL, +/- vs the league leaders), 0-100 · ${minGames(teamGames) > 1 ? `players in ${minGames(teamGames)}+ games` : `all players until teams have played ${QUALIFY_FROM} games`} · tap a column to sort · updated ${ago(stats.updated)}</p>`);
   app.querySelectorAll('[data-sort]').forEach(th =>
     th.onclick = () => { effSort = +th.dataset.sort; showEfficiency(); });
   bindRows('player', id => '#/player/' + id);
@@ -859,64 +859,80 @@ const shareOfBest = (rows, k, ymax) => {
 };
 const pct0 = f => `${Math.round(f * 100)}%`;
 
-// The radar compares averages with the league leader's average in each stat
-// (qualified players, as on the Leaders tab): { k: { v, n } }.
+// Radar axes, clockwise from the upper left: scoring and shooting across
+// the top half, the rest across the bottom. Each is compared with the league
+// leader (qualified players, as on the Leaders tab; +/- uses the same
+// games rule).
+const RADAR_AXES = [
+  ...['pts', 'ast', 'tpp', 'fgp'].map(id => LEADERS.find(c => c.id === id)),
+  ...['reb', 'blk', 'stl'].map(id => LEADERS.find(c => c.id === id)),
+  { id: 'pm', label: '+/-', val: p => (p.pm == null ? NaN : p.pm / p.gp) },
+];
+const isPct = c => c.label.endsWith('%');
+
+// { id: { v, n } } per radar axis.
 function leaderAvgs(stats) {
   const teamGames = teamGamesOf(stats);
   const all = [...combinePlayers(stats).values()];
-  return Object.fromEntries(LOG_SERIES.map(([k]) => {
-    const cat = LEADERS.find(c => c.id === k);
-    let top = null;
-    for (const p of all) if (qualifies(p, cat, teamGames) && (!top || cat.val(p) > cat.val(top))) top = p;
-    return [k, top ? { v: cat.val(top), n: top.n } : null];
+  return Object.fromEntries(RADAR_AXES.map(cat => {
+    let top = null, best = -Infinity;
+    for (const p of all) {
+      const v = cat.val(p);
+      if (Number.isFinite(v) && v > best && qualifies(p, cat, teamGames)) { top = p; best = v; }
+    }
+    return [cat.id, top && best > 0 ? { v: best, n: top.n } : null];
   }));
 }
-const leaderShares = (p, leaders) => LOG_SERIES.map(([k]) => (leaders[k]?.v ? p[k] / p.gp / leaders[k].v : 0));
+// Player value ÷ leader value per axis. Can be negative (+/-) or above 1
+// (a non-qualifier); the shape is clamped to the center and the rim.
+const leaderShares = (p, leaders) => RADAR_AXES.map(c => {
+  const v = c.val(p), lead = leaders[c.id]?.v;
+  return lead && Number.isFinite(v) ? v / lead : 0;
+});
+const clamp01 = x => Math.max(0, Math.min(1, x));
 
-// ALL (all-around): the radar shape's area as a share of the full pentagon,
-// 0-100. With corners r1…r5 (capped at the rim), area = ½·sin72°·Σ r_i·r_i+1,
-// so the share is Σ r_i·r_i+1 / 5. Neighbors matter: it rewards stats next
-// to each other on the radar (order fixed: PTS, REB, AST, BLK, STL).
+// ALL (all-around): the radar shape's area as a share of the full octagon,
+// 0-100. With corners r1…rn (clamped to 0-1), area = ½·sin(2π/n)·Σ r_i·r_i+1,
+// so the share is Σ r_i·r_i+1 / n. Neighbors matter: it rewards stats next
+// to each other on the radar (order fixed, see RADAR_AXES).
 const allScore = shares => {
-  const r = shares.map(x => Math.min(1, x));
+  const r = shares.map(clamp01);
   return r.reduce((a, v, i) => a + v * r[(i + 1) % r.length], 0) / r.length * 100;
 };
 const allTag = (width, score) => `<text class="alltag" x="${width - 6}" y="16" text-anchor="end">ALL <tspan class="av">${
   score == null ? '' : score.toFixed(1)}</tspan></text>`;
-const radarNote = leaders => `Average per game ÷ the league leader's average (${
-  LOG_SERIES.map(([k, name]) => `${name} ${leaders[k] ? `${leaders[k].v.toFixed(1)}, ${esc(leaders[k].n)}` : '–'}`).join(' · ')}).`;
+const radarNote = leaders => `Each corner: player ÷ the league leader (${
+  RADAR_AXES.map(c => `${c.label} ${leaders[c.id] ? `${leaders[c.id].v.toFixed(1)}${isPct(c) ? '%' : ''}, ${esc(leaders[c.id].n)}` : '–'}`).join(' · ')}). A negative +/- sits at the center.`;
 
-// Pentagon geometry: 0 at the center to 1 (the season best) at the rim.
+// Radar geometry: 0 at the center to 1 (the leader) at the rim. Rotated half
+// a step so four axes sit above the middle and four below.
 function radarFrame(width) {
-  const size = Math.min(width, 280), R = size / 2 - 46, cx = width / 2, cy = size / 2;
-  const n = LOG_SERIES.length;
+  const size = Math.min(width, 300), R = size / 2 - 50, cx = width / 2, cy = size / 2;
+  const n = RADAR_AXES.length;
   const pt = (i, f) => {
-    const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+    const a = -Math.PI + Math.PI / n + i * 2 * Math.PI / n;
     return [cx + Math.cos(a) * R * f, cy + Math.sin(a) * R * f];
   };
-  // Shapes stop at the rim; a non-qualifier can average more than the leader.
-  const poly = fs => LOG_SERIES.map((_, i) => pt(i, Math.min(1, typeof fs === 'number' ? fs : fs[i])).map(v => v.toFixed(1)).join(',')).join(' ');
+  const poly = fs => RADAR_AXES.map((_, i) => pt(i, clamp01(typeof fs === 'number' ? fs : fs[i])).map(v => v.toFixed(1)).join(',')).join(' ');
   const grid = [0.25, 0.5, 0.75, 1].map(f => `<polygon class="ring${f === 1 ? ' rim' : ''}" points="${poly(f)}"/>`).join('')
-    + LOG_SERIES.map((_, i) => { const [x, y] = pt(i, 1); return `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`; }).join('');
+    + RADAR_AXES.map((_, i) => { const [x, y] = pt(i, 1); return `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`; }).join('');
   const label = (i, html) => {
-    const [x, y] = pt(i, 1.2);
+    const [x, y] = pt(i, 1.14);
     const anchor = Math.abs(x - cx) < 2 ? 'middle' : x > cx ? 'start' : 'end';
     return `<text class="rl" x="${x}" y="${y + 4}" text-anchor="${anchor}">${html}</text>`;
   };
   return { size, cx, pt, poly, grid, label };
 }
 
-// Player page: the player's five shares of the leaders' averages, each axis
-// keyed to its chart's color.
+// Player page: the player's shares of the leaders.
 function shareRadar(shares, width) {
   const { size, pt, poly, grid, label } = radarFrame(width);
   const shape = poly(shares);
-  const dots = LOG_SERIES.map((_, i) => { const [x, y] = pt(i, Math.min(1, shares[i])); return `<circle class="dot s${i + 1}" cx="${x}" cy="${y}" r="4"/>`; }).join('');
-  const labels = LOG_SERIES.map(([, name], i) =>
-    label(i, `<tspan class="rk s${i + 1}">●</tspan> ${name} <tspan class="rv">${pct0(shares[i])}</tspan>`)).join('');
+  const dots = RADAR_AXES.map((_, i) => { const [x, y] = pt(i, clamp01(shares[i])); return `<circle class="dot" cx="${x}" cy="${y}" r="4"/>`; }).join('');
+  const labels = RADAR_AXES.map((c, i) => label(i, `${c.label} <tspan class="rv">${pct0(shares[i])}</tspan>`)).join('');
   return `
-    <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the league leader's average per stat: ${
-      LOG_SERIES.map(([, label], i) => `${label} ${pct0(shares[i])}`).join(', ')}">
+    <svg class="radar" width="${width}" height="${size}" role="img" aria-label="Share of the league leader per stat: ${
+      RADAR_AXES.map((c, i) => `${c.label} ${pct0(shares[i])}`).join(', ')}">
       ${grid}<polygon class="shape" points="${shape}"/>${dots}${labels}${allTag(width, allScore(shares))}
     </svg>`;
 }
@@ -1118,7 +1134,7 @@ async function showPlayer(id, setKey) {
     ${set ? setChips(sets, set) : ''}
     ${table}
     ${p ? `<h2>Compared to the league leaders</h2>${shareRadar(leaderShares(p, leaders), Math.min(app.clientWidth || window.innerWidth, 760) - 12)}
-      <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full pentagon.</p>` : ''}
+      <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full octagon.</p>` : ''}
     ${rows.length ? `${logCharts(rows, Math.min(app.clientWidth || window.innerWidth, 760) - 12, Object.fromEntries(LOG_SERIES.map(([k]) => [k, highs?.league?.[k]?.v])))}${logTable(rows)}` : ''}`);
   bindSetChips(key => showPlayer(id, key));
   bindLogCharts(rows);
@@ -1254,15 +1270,15 @@ function teamRadar(players, leaders, width) {
   const { size, poly, grid, label } = radarFrame(width);
   const shares = top.map(p => leaderShares(p, leaders));
   const shapes = top.map((p, i) => `<polygon class="tshape c${i + 1}" data-i="${i}" points="${poly(shares[i])}"/>`).join('');
-  const labels = LOG_SERIES.map(([, name], i) => label(i, `${name} <tspan class="rv" data-axis="${i}"></tspan>`)).join('');
+  const labels = RADAR_AXES.map((c, i) => label(i, `${c.label} <tspan class="rv" data-axis="${i}"></tspan>`)).join('');
   return `
     <h2>Compared to the league leaders</h2>
-    <svg class="radar team" width="${width}" height="${size}" data-shares="${esc(JSON.stringify(shares))}" role="img" aria-label="Share of the league leader's average per stat for the team's top players">
+    <svg class="radar team" width="${width}" height="${size}" data-shares="${esc(JSON.stringify(shares))}" role="img" aria-label="Share of the league leader per stat for the team's top players">
       ${grid}${shapes}${labels}${allTag(width, null)}
     </svg>
     <div class="chips radarkey">${top.map((p, i) =>
       `<button data-hi="${i}"><i class="c${i + 1}"></i>${esc(p.n)}<span class="all">${allScore(shares[i]).toFixed(1)}</span></button>`).join('')}</div>
-    <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full pentagon. Top ${top.length} by minutes · tap a player to highlight.</p>`;
+    <p class="note radarnote">${radarNote(leaders)} ALL = area of the shape as a share of the full octagon. Top ${top.length} by minutes · tap a player to highlight.</p>`;
 }
 
 // Tap a player to bring their shape forward and label the corners with their
